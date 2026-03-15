@@ -1,11 +1,16 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.responses import JSONResponse
 
 from app.config import get_settings
-from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api
+from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin
 
 
 @asynccontextmanager
@@ -30,6 +35,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mail Assistant", version="0.1.0", lifespan=lifespan)
 
+# Rate Limiting
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again later."})
+
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
@@ -51,3 +65,4 @@ app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
 app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
+app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"])

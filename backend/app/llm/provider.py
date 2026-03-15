@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import AsyncIterator
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,6 +92,28 @@ class LlmProvider:
             raise
 
 
+    async def stream_chat(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 0.5,
+        max_tokens: int = 4000,
+    ) -> AsyncIterator[str]:
+        """Stream a chat completion. Yields content chunks as strings."""
+        model = model or self.default_model
+        stream = await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+
 _provider = None
 
 
@@ -98,4 +121,26 @@ def get_llm_provider() -> LlmProvider:
     global _provider
     if _provider is None:
         _provider = LlmProvider()
+        # Load persisted model from DB if available
+        try:
+            import asyncio
+            from app.database import async_session
+            from sqlalchemy import select
+
+            async def _load_model():
+                from app.models.audit import AppSetting
+                async with async_session() as db:
+                    result = await db.execute(select(AppSetting).where(AppSetting.key == "llm_active_model"))
+                    setting = result.scalar_one_or_none()
+                    if setting and setting.value:
+                        _provider.default_model = setting.value
+                        logger.info(f"Loaded persisted model: {setting.value}")
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_load_model())
+            except RuntimeError:
+                asyncio.run(_load_model())
+        except Exception as e:
+            logger.debug(f"Could not load persisted model: {e}")
     return _provider

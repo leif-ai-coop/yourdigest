@@ -20,6 +20,11 @@ class DigestPolicy(Base, UUIDMixin, TimestampMixin):
     include_feeds: Mapped[bool] = mapped_column(default=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     template: Mapped[str] = mapped_column(String(100), default="default")
+    digest_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weather_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=4000)
+    since_last_any_digest: Mapped[bool] = mapped_column(default=False)
+    section_order: Mapped[str] = mapped_column(Text, default='["weather","ai_overview","mail","feeds","unsubscribe"]')
 
 
 class DigestRun(Base, UUIDMixin, TimestampMixin):

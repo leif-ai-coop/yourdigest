@@ -1,6 +1,8 @@
+import json
 import logging
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mail import MailAccount, MailMessage, MailAttachment, MailLink
@@ -31,9 +33,31 @@ def extract_links(html: str | None) -> list[dict]:
     return links
 
 
-async def sync_account(db: AsyncSession, account: MailAccount) -> int:
-    """Sync new messages from an IMAP account. Returns count of new messages."""
-    password = decrypt_value(account.password_encrypted)
+def _get_sync_folders(account: MailAccount) -> list[str]:
+    """Get list of folders to sync for an account."""
+    try:
+        folders = json.loads(account.sync_folders or '["INBOX"]')
+        if isinstance(folders, list) and folders:
+            return folders
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return ["INBOX"]
+
+
+async def _get_last_uid(db: AsyncSession, account_id, folder: str) -> int:
+    """Get the highest synced UID for a specific folder."""
+    result = await db.scalar(
+        select(func.max(MailMessage.uid)).where(
+            MailMessage.account_id == account_id,
+            MailMessage.folder == folder,
+        )
+    )
+    return result or 0
+
+
+async def _sync_folder(db: AsyncSession, account: MailAccount, password: str, folder: str) -> int:
+    """Sync new messages from a specific IMAP folder. Returns count."""
+    last_uid = await _get_last_uid(db, account.id, folder)
 
     messages = fetch_new_messages(
         host=account.imap_host,
@@ -41,13 +65,23 @@ async def sync_account(db: AsyncSession, account: MailAccount) -> int:
         username=account.username,
         password=password,
         use_ssl=account.imap_use_ssl,
-        last_uid=account.last_sync_uid or 0,
+        last_uid=last_uid,
+        folder=folder,
     )
 
     count = 0
-    max_uid = account.last_sync_uid or 0
-
     for uid, parsed in messages:
+        # Skip if already exists
+        exists = await db.execute(
+            select(MailMessage.id).where(
+                MailMessage.account_id == account.id,
+                MailMessage.folder == folder,
+                MailMessage.uid == uid,
+            )
+        )
+        if exists.scalar_one_or_none():
+            continue
+
         msg = MailMessage(
             account_id=account.id,
             uid=uid,
@@ -61,7 +95,7 @@ async def sync_account(db: AsyncSession, account: MailAccount) -> int:
             body_html=parsed.get("body_html"),
             is_read=parsed.get("is_read", False),
             is_flagged=parsed.get("is_flagged", False),
-            folder="INBOX",
+            folder=folder,
             raw_headers=parsed.get("raw_headers"),
             size_bytes=parsed.get("size_bytes"),
         )
@@ -89,15 +123,29 @@ async def sync_account(db: AsyncSession, account: MailAccount) -> int:
             )
             db.add(link)
 
-        if uid > max_uid:
-            max_uid = uid
         count += 1
 
-    if max_uid > (account.last_sync_uid or 0):
-        account.last_sync_uid = max_uid
-        from datetime import datetime, timezone
-        account.last_sync_at = datetime.now(timezone.utc)
-        account.last_error = None
-
-    logger.info(f"Synced {count} messages for {account.email}")
     return count
+
+
+async def sync_account(db: AsyncSession, account: MailAccount) -> int:
+    """Sync new messages from all configured folders. Returns total count."""
+    password = decrypt_value(account.password_encrypted)
+    folders = _get_sync_folders(account)
+
+    total = 0
+    for folder in folders:
+        try:
+            count = await _sync_folder(db, account, password, folder)
+            total += count
+            if count > 0:
+                logger.info(f"Synced {count} messages from {folder} for {account.email}")
+        except Exception as e:
+            logger.error(f"Error syncing folder {folder} for {account.email}: {e}")
+
+    from datetime import datetime, timezone
+    account.last_sync_at = datetime.now(timezone.utc)
+    account.last_error = None
+
+    logger.info(f"Synced {total} total messages for {account.email} ({len(folders)} folders)")
+    return total

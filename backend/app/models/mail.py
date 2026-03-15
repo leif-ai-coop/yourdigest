@@ -25,12 +25,13 @@ class MailAccount(Base, UUIDMixin, TimestampMixin):
     last_sync_uid: Mapped[int] = mapped_column(Integer, default=0)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sync_folders: Mapped[str] = mapped_column(Text, default='["INBOX"]')
 
 
 class MailMessage(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "mail_message"
     __table_args__ = (
-        Index("ix_mail_message_account_uid", "account_id", "uid", unique=True),
+        Index("ix_mail_message_account_folder_uid", "account_id", "folder", "uid", unique=True),
         Index("ix_mail_message_date", "date"),
         Index("ix_mail_message_is_read", "is_read"),
     )

@@ -4,6 +4,10 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
+# Security audit — warn but don't block build
+RUN pip install --no-cache-dir pip-audit \
+    && pip-audit -r requirements.txt --desc || true
+
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*

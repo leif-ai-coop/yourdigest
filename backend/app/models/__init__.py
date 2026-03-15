@@ -9,6 +9,7 @@ from app.models.weather import WeatherSource, WeatherSnapshot
 from app.models.llm import LlmProviderConfig, LlmTask, LlmPromptVersion
 from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.audit import AuditLog, AppSetting
+from app.models.garmin import GarminAccount, GarminSnapshot
 
 __all__ = [
     "Base",
@@ -22,4 +23,5 @@ __all__ = [
     "LlmProviderConfig", "LlmTask", "LlmPromptVersion",
     "AssistantConversation", "AssistantMessage",
     "AuditLog", "AppSetting",
+    "GarminAccount", "GarminSnapshot",
 ]

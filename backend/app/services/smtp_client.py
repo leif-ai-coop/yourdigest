@@ -17,12 +17,18 @@ async def send_email(
     subject: str,
     body_text: str | None = None,
     body_html: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
 ):
     """Send an email via SMTP."""
     msg = MIMEMultipart("alternative")
     msg["From"] = from_addr
     msg["To"] = to_addr
     msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
 
     if body_text:
         msg.attach(MIMEText(body_text, "plain"))

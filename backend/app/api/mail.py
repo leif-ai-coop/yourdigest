@@ -1,6 +1,7 @@
 import uuid
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, desc, func
+from pydantic import BaseModel, Field
+from sqlalchemy import select, desc, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,8 +14,62 @@ from app.schemas.mail import (
 from app.schemas.common import MessageResponse
 from app.exceptions import NotFoundError
 from app.services.connector_service import encrypt_value, decrypt_value
+import json
 
 router = APIRouter()
+
+import re
+import bleach
+
+ALLOWED_TAGS = list(bleach.ALLOWED_TAGS) + [
+    "div", "span", "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6",
+    "table", "thead", "tbody", "tr", "td", "th", "caption", "colgroup", "col",
+    "img", "figure", "figcaption", "center", "font",
+    "ul", "ol", "li", "dl", "dt", "dd",
+    "pre", "code", "blockquote", "section", "article", "header", "footer", "nav", "main",
+    "sup", "sub", "mark", "del", "ins", "small", "big",
+]
+ALLOWED_ATTRS = {
+    "*": ["class", "id", "style", "dir", "lang", "align", "valign", "width", "height", "bgcolor", "color"],
+    "a": ["href", "title", "target", "rel"],
+    "img": ["src", "alt", "title", "width", "height"],
+    "td": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor"],
+    "th": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor"],
+    "table": ["border", "cellpadding", "cellspacing", "width"],
+    "font": ["color", "size", "face"],
+    "col": ["span", "width"],
+}
+ALLOWED_PROTOCOLS = ["http", "https", "mailto", "cid"]
+
+
+def _sanitize_html(html: str | None) -> str | None:
+    """Sanitize HTML to prevent XSS while keeping email formatting."""
+    if not html:
+        return html
+    return bleach.clean(html, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRS, protocols=ALLOWED_PROTOCOLS, strip=True)
+
+
+def _extract_unsubscribe_url(raw_headers: str | None) -> str | None:
+    """Extract HTTP unsubscribe URL from List-Unsubscribe header."""
+    if not raw_headers:
+        return None
+    for line in raw_headers.splitlines():
+        if line.lower().startswith("list-unsubscribe:"):
+            # Find HTTP(S) URLs in angle brackets or bare
+            urls = re.findall(r'<(https?://[^>]+)>', line)
+            if urls:
+                return urls[0]
+            urls = re.findall(r'(https?://\S+)', line)
+            if urls:
+                return urls[0]
+    return None
+
+
+def _add_unsubscribe(msg) -> dict:
+    """Convert a MailMessage ORM object to dict with unsubscribe_url."""
+    data = MailMessageOut.model_validate(msg).model_dump()
+    data["unsubscribe_url"] = _extract_unsubscribe_url(msg.raw_headers)
+    return data
 
 
 @router.get("/accounts", response_model=list[MailAccountOut])
@@ -103,7 +158,48 @@ async def trigger_sync(account_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     return MessageResponse(message=f"Synced {count} new messages")
 
 
-@router.get("/messages", response_model=list[MailMessageOut])
+@router.get("/accounts/{account_id}/folders")
+async def list_folders(account_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """List available IMAP folders for an account."""
+    account = await db.get(MailAccount, account_id)
+    if not account:
+        raise NotFoundError("Mail account not found")
+    from app.services.imap_client import list_imap_folders
+    password = decrypt_value(account.password_encrypted)
+    folders = list_imap_folders(
+        host=account.imap_host, port=account.imap_port,
+        username=account.username, password=password, use_ssl=account.imap_use_ssl,
+    )
+    sync_folders = json.loads(account.sync_folders or '["INBOX"]')
+    return {"available": folders, "synced": sync_folders}
+
+
+class SyncFoldersUpdate(BaseModel):
+    folders: list[str]
+
+
+@router.put("/accounts/{account_id}/folders", response_model=MessageResponse)
+async def set_sync_folders(account_id: uuid.UUID, data: SyncFoldersUpdate, db: AsyncSession = Depends(get_db)):
+    """Set which IMAP folders to sync for an account."""
+    account = await db.get(MailAccount, account_id)
+    if not account:
+        raise NotFoundError("Mail account not found")
+    account.sync_folders = json.dumps(data.folders)
+    return MessageResponse(message=f"Sync folders updated: {', '.join(data.folders)}")
+
+
+@router.get("/folders")
+async def get_synced_folders(db: AsyncSession = Depends(get_db)):
+    """Get all distinct folders that have synced messages."""
+    result = await db.execute(
+        select(MailMessage.folder, func.count(MailMessage.id).label("count"))
+        .group_by(MailMessage.folder)
+        .order_by(MailMessage.folder)
+    )
+    return [{"folder": row.folder, "count": row.count} for row in result.all()]
+
+
+@router.get("/messages")
 async def list_messages(
     account_id: uuid.UUID | None = None,
     folder: str | None = None,
@@ -124,10 +220,10 @@ async def list_messages(
         query = query.where(MailMessage.is_archived == is_archived)
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
-    return result.scalars().all()
+    return [_add_unsubscribe(msg) for msg in result.scalars().all()]
 
 
-@router.get("/messages/{message_id}", response_model=MailMessageDetail)
+@router.get("/messages/{message_id}")
 async def get_message(message_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(MailMessage)
@@ -141,7 +237,11 @@ async def get_message(message_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     message = result.scalar_one_or_none()
     if not message:
         raise NotFoundError("Message not found")
-    return message
+    data = MailMessageDetail.model_validate(message).model_dump()
+    data["unsubscribe_url"] = _extract_unsubscribe_url(message.raw_headers)
+    if data.get("body_html"):
+        data["body_html"] = _sanitize_html(data["body_html"])
+    return data
 
 
 @router.post("/messages/action", response_model=MessageResponse)
@@ -163,4 +263,45 @@ async def message_action(data: MailActionRequest, db: AsyncSession = Depends(get
                 msg.is_archived = True
             case "unarchive":
                 msg.is_archived = False
+            case "delete":
+                await db.delete(msg)
     return MessageResponse(message=f"Applied '{data.action}' to {len(data.message_ids)} messages")
+
+
+class SendReplyRequest(BaseModel):
+    message_id: uuid.UUID
+    to: str = Field(max_length=500)
+    subject: str = Field(max_length=1000)
+    body: str = Field(max_length=100000)
+
+
+@router.post("/send-reply", response_model=MessageResponse)
+async def send_reply(data: SendReplyRequest, db: AsyncSession = Depends(get_db)):
+    """Send a reply to an email message via SMTP."""
+    from app.services.smtp_client import send_email
+
+    message = await db.get(MailMessage, data.message_id)
+    if not message:
+        raise NotFoundError("Message not found")
+
+    account = await db.get(MailAccount, message.account_id)
+    if not account or not account.smtp_host:
+        raise NotFoundError("No SMTP configuration found for this account")
+
+    password = decrypt_value(account.password_encrypted)
+
+    await send_email(
+        host=account.smtp_host,
+        port=account.smtp_port or 587,
+        username=account.username,
+        password=password,
+        use_tls=account.smtp_use_tls if account.smtp_use_tls is not None else True,
+        from_addr=account.email,
+        to_addr=data.to,
+        subject=data.subject,
+        body_text=data.body,
+        in_reply_to=message.message_id,
+        references=message.message_id,
+    )
+
+    return MessageResponse(message=f"Reply sent to {data.to}")

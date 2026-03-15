@@ -116,15 +116,107 @@ def parse_email_message(raw_bytes: bytes) -> dict:
     }
 
 
-def fetch_new_messages(host: str, port: int, username: str, password: str, use_ssl: bool, last_uid: int = 0) -> list[tuple[int, dict]]:
-    """Fetch messages with UID > last_uid. Returns list of (uid, parsed_message)."""
+def save_draft(
+    host: str, port: int, username: str, password: str, use_ssl: bool,
+    from_addr: str, to_addr: str, subject: str, body_text: str,
+    in_reply_to: str | None = None, references: str | None = None,
+) -> None:
+    """Save a message as draft in the IMAP Drafts folder."""
+    import imaplib
+    from email.mime.text import MIMEText
+    from email.utils import formatdate
+    import time
+
+    msg = MIMEText(body_text, "plain", "utf-8")
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(time.time(), localtime=True)
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+
     try:
         if use_ssl:
             conn = imaplib.IMAP4_SSL(host, port)
         else:
             conn = imaplib.IMAP4(host, port)
         conn.login(username, password)
-        conn.select("INBOX")
+
+        # Try common drafts folder names
+        draft_folder = None
+        for folder_name in ["Drafts", "INBOX.Drafts", "Entw&APw-rfe", "Draft", "INBOX.Draft"]:
+            status, _ = conn.select(folder_name)
+            if status == "OK":
+                draft_folder = folder_name
+                break
+
+        if not draft_folder:
+            # List folders and find one with \\Drafts flag
+            status, folders = conn.list()
+            if status == "OK":
+                for f in folders:
+                    decoded = f.decode() if isinstance(f, bytes) else f
+                    if "\\Drafts" in decoded:
+                        # Extract folder name from IMAP list response
+                        parts = decoded.split('"')
+                        if len(parts) >= 5:
+                            draft_folder = parts[-2]
+                            break
+
+        if not draft_folder:
+            draft_folder = "Drafts"
+            conn.create(draft_folder)
+
+        import imaplib as _imap
+        conn.append(draft_folder, "\\Draft \\Seen", None, msg.as_bytes())
+        conn.logout()
+        logger.info(f"Draft saved to {draft_folder}")
+    except Exception as e:
+        logger.error(f"Failed to save draft: {e}")
+        raise
+
+
+def list_imap_folders(host: str, port: int, username: str, password: str, use_ssl: bool) -> list[str]:
+    """List all IMAP folders for an account."""
+    try:
+        if use_ssl:
+            conn = imaplib.IMAP4_SSL(host, port)
+        else:
+            conn = imaplib.IMAP4(host, port)
+        conn.login(username, password)
+        status, folder_data = conn.list()
+        conn.logout()
+        if status != "OK":
+            return []
+        folders = []
+        for item in folder_data:
+            if isinstance(item, bytes):
+                # Parse: (\\flags) "delimiter" "folder_name"
+                decoded = item.decode("utf-8", errors="replace")
+                # Extract folder name (last quoted or unquoted part)
+                parts = decoded.rsplit('"', 2)
+                if len(parts) >= 2:
+                    folders.append(parts[-2])
+                else:
+                    parts = decoded.rsplit(" ", 1)
+                    folders.append(parts[-1].strip('"'))
+        return folders
+    except Exception as e:
+        logger.error(f"Error listing folders: {e}")
+        return []
+
+
+def fetch_new_messages(host: str, port: int, username: str, password: str, use_ssl: bool, last_uid: int = 0, folder: str = "INBOX") -> list[tuple[int, dict]]:
+    """Fetch messages with UID > last_uid from a specific folder. Returns list of (uid, parsed_message)."""
+    try:
+        if use_ssl:
+            conn = imaplib.IMAP4_SSL(host, port)
+        else:
+            conn = imaplib.IMAP4(host, port)
+        conn.login(username, password)
+        conn.select(folder)
 
         # Search for messages with UID > last_uid
         if last_uid > 0:

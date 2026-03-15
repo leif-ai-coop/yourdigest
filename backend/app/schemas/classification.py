@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -43,7 +44,7 @@ class ClassificationOut(BaseModel):
     summary: str | None
     action_required: bool
     due_date: str | None
-    tags: dict | None
+    tags: Any | None
     classified_by: str
     llm_model: str | None
     created_at: datetime

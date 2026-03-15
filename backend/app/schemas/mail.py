@@ -1,6 +1,7 @@
 import uuid
+from typing import Literal
 from datetime import datetime
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class MailAccountCreate(BaseModel):
@@ -42,6 +43,7 @@ class MailAccountOut(BaseModel):
     enabled: bool
     last_sync_at: datetime | None
     last_error: str | None
+    sync_folders: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -90,6 +92,7 @@ class MailMessageOut(BaseModel):
     folder: str
     size_bytes: int | None
     created_at: datetime
+    unsubscribe_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -103,5 +106,5 @@ class MailMessageDetail(MailMessageOut):
 
 
 class MailActionRequest(BaseModel):
-    action: str  # read, unread, flag, unflag, archive, unarchive
-    message_ids: list[uuid.UUID]
+    action: Literal["read", "unread", "flag", "unflag", "archive", "unarchive", "delete"]
+    message_ids: list[uuid.UUID] = Field(max_length=500)

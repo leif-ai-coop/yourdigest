@@ -6,16 +6,23 @@ from app.models.llm import LlmPromptVersion
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROMPTS = {
-    "classify": {
-        "system": """You are an email classification assistant. Classify the given email into one of these categories:
-- important: Personal emails, urgent business, requires action
-- newsletter: Newsletters, subscriptions, regular updates
-- notification: Automated notifications, alerts, system messages
-- spam: Unwanted, promotional, suspicious emails
-- social: Social media notifications, community updates
-- finance: Banking, invoices, payments, receipts
-- shipping: Order confirmations, shipping updates, delivery notices
+DEFAULT_CATEGORIES = {
+    "important": "Personal emails, urgent business, requires action",
+    "newsletter": "Newsletters, subscriptions, regular updates",
+    "notification": "Automated notifications, alerts, system messages",
+    "spam": "Unwanted, promotional, suspicious emails",
+    "social": "Social media notifications, community updates",
+    "finance": "Banking, invoices, payments, receipts",
+    "shipping": "Order confirmations, shipping updates, delivery notices",
+}
+
+
+def build_classify_prompt(categories: dict[str, str] | None = None) -> str:
+    """Build classification system prompt from category definitions."""
+    cats = categories or DEFAULT_CATEGORIES
+    cat_lines = "\n".join(f"- {k}: {v}" for k, v in cats.items())
+    return f"""You are an email classification assistant. Classify the given email into one of these categories:
+{cat_lines}
 
 Respond in JSON format with these fields:
 - category: one of the categories above
@@ -24,7 +31,12 @@ Respond in JSON format with these fields:
 - summary: brief 1-2 sentence summary
 - action_required: boolean
 - due_date: ISO date string if applicable, null otherwise
-- tags: list of relevant tags""",
+- tags: list of relevant tags"""
+
+
+DEFAULT_PROMPTS = {
+    "classify": {
+        "system": build_classify_prompt(),
         "user": "Classify this email:\n\nFrom: {from}\nSubject: {subject}\n\nBody:\n{body}",
     },
     "extract": {
@@ -48,6 +60,22 @@ Group by category, highlight action items, and provide a brief overview.""",
 }
 
 
+async def get_categories(db: AsyncSession) -> dict[str, str]:
+    """Get configured categories from app settings, or defaults."""
+    from app.models.audit import AppSetting
+    import json
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "categories")
+    )
+    setting = result.scalar_one_or_none()
+    if setting and setting.value:
+        try:
+            return json.loads(setting.value)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return DEFAULT_CATEGORIES
+
+
 async def get_prompt(db: AsyncSession, task_type: str) -> tuple[str, str]:
     """Get active prompt for a task type. Falls back to defaults."""
     result = await db.execute(
@@ -59,6 +87,12 @@ async def get_prompt(db: AsyncSession, task_type: str) -> tuple[str, str]:
 
     if prompt:
         return prompt.system_prompt, prompt.user_prompt_template
+
+    # For classify, build prompt dynamically from configured categories
+    if task_type == "classify":
+        categories = await get_categories(db)
+        system = build_classify_prompt(categories)
+        return system, DEFAULT_PROMPTS["classify"]["user"]
 
     default = DEFAULT_PROMPTS.get(task_type)
     if default:

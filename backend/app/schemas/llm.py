@@ -71,3 +71,4 @@ class DraftReplyResponse(BaseModel):
     draft: str
     model: str
     tokens_used: int
+    saved_to_drafts: bool = False

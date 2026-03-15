@@ -5,8 +5,13 @@ import { PageSpinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
 import {
   FileText, Plus, Trash2, Check, X, Play, Eye, Clock,
-  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown
+  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown, Heart
 } from 'lucide-react'
+
+interface HealthOption {
+  id: string
+  label: string
+}
 
 interface DigestPolicy {
   id: string
@@ -25,6 +30,11 @@ interface DigestPolicy {
   max_tokens: number
   since_last_any_digest: boolean
   section_order: string | null
+  include_health: boolean
+  health_charts: string[] | null
+  health_prompt: string | null
+  health_data_types: string[] | null
+  health_days: number
   created_at: string
 }
 
@@ -47,6 +57,8 @@ export default function DigestsPage() {
   const [running, setRunning] = useState<string | null>(null)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [runsPage, setRunsPage] = useState(0)
+  const RUNS_PER_PAGE = 5
   const [form, setForm] = useState({
     name: '', schedule_cron: '0 7 * * *', target_email: '',
     include_weather: true, include_feeds: true, since_last_any_digest: false,
@@ -62,15 +74,43 @@ export default function DigestsPage() {
   const [editPromptText, setEditPromptText] = useState('')
   const [editWeatherPrompt, setEditWeatherPrompt] = useState('')
   const [editMaxTokens, setEditMaxTokens] = useState(4000)
-  const [editSectionOrder, setEditSectionOrder] = useState<string[]>(['weather', 'ai_overview', 'mail', 'feeds', 'unsubscribe'])
+  const [editSectionOrder, setEditSectionOrder] = useState<string[]>(['weather', 'health', 'ai_overview', 'mail', 'feeds', 'unsubscribe'])
+  const [editHealth, setEditHealth] = useState(false)
+  const [editHealthCharts, setEditHealthCharts] = useState<string[]>([])
+  const [editHealthPrompt, setEditHealthPrompt] = useState('')
+  const [editHealthDataTypes, setEditHealthDataTypes] = useState<string[]>([])
+  const [healthChartOptions, setHealthChartOptions] = useState<HealthOption[]>([])
+  const [healthDataTypeOptions, setHealthDataTypeOptions] = useState<HealthOption[]>([])
+  const [editHealthDays, setEditHealthDays] = useState(7)
 
-  const defaultSectionOrder = ['weather', 'ai_overview', 'mail', 'feeds', 'unsubscribe']
+  const defaultSectionOrder = ['weather', 'health', 'ai_overview', 'mail', 'feeds', 'unsubscribe']
   const sectionLabels: Record<string, string> = {
     weather: 'Weather',
+    health: 'Health',
     ai_overview: 'AI Overview',
     mail: 'Emails',
     feeds: 'RSS Feeds',
     unsubscribe: 'Unsubscribe Links',
+  }
+
+  // Toggle a section: add to order if enabling, remove if disabling
+  const toggleSection = (key: string, enabled: boolean) => {
+    if (enabled) {
+      if (!editSectionOrder.includes(key)) {
+        // Insert at default position
+        const defIdx = defaultSectionOrder.indexOf(key)
+        const newOrder = [...editSectionOrder]
+        let insertAt = newOrder.length
+        for (let i = defIdx + 1; i < defaultSectionOrder.length; i++) {
+          const pos = newOrder.indexOf(defaultSectionOrder[i])
+          if (pos !== -1) { insertAt = pos; break }
+        }
+        newOrder.splice(insertAt, 0, key)
+        setEditSectionOrder(newOrder)
+      }
+    } else {
+      setEditSectionOrder(prev => prev.filter(k => k !== key))
+    }
   }
 
   const moveSectionUp = (idx: number) => {
@@ -91,9 +131,12 @@ export default function DigestsPage() {
     Promise.all([
       api.get<DigestPolicy[]>('/digest/policies'),
       api.get<DigestRun[]>('/digest/runs'),
-    ]).then(([p, r]) => {
+      api.get<{ charts: HealthOption[]; data_types: HealthOption[] }>('/digest/health-options'),
+    ]).then(([p, r, ho]) => {
       setPolicies(p)
       setRuns(r)
+      setHealthChartOptions(ho.charts)
+      setHealthDataTypeOptions(ho.data_types)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -312,8 +355,19 @@ export default function DigestsPage() {
                           setEditPromptText(policy.digest_prompt || '')
                           setEditWeatherPrompt(policy.weather_prompt || '')
                           setEditMaxTokens(policy.max_tokens || 4000)
+                          setEditHealth(policy.include_health || false)
+                          setEditHealthCharts(policy.health_charts || [])
+                          setEditHealthPrompt(policy.health_prompt || '')
+                          setEditHealthDataTypes(policy.health_data_types || [])
+                          setEditHealthDays(policy.health_days || 7)
                           try {
-                            setEditSectionOrder(policy.section_order ? JSON.parse(policy.section_order) : defaultSectionOrder)
+                            const stored = policy.section_order ? JSON.parse(policy.section_order) as string[] : defaultSectionOrder
+                            // Merge: append any new default keys not in stored order
+                            const merged = [...stored]
+                            for (const key of defaultSectionOrder) {
+                              if (!merged.includes(key)) merged.push(key)
+                            }
+                            setEditSectionOrder(merged)
                           } catch { setEditSectionOrder(defaultSectionOrder) }
                         }
                       }}
@@ -390,16 +444,45 @@ export default function DigestsPage() {
                       </div>
                     </div>
 
-                    {/* Toggles */}
+                    {/* Content Modules */}
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1.5">Inhalte</label>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editSectionOrder.includes('mail')}
+                            onChange={e => toggleSection('mail', e.target.checked)} className="rounded" />
+                          <Mail className="w-3.5 h-3.5" /> Emails
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editSectionOrder.includes('ai_overview')}
+                            onChange={e => toggleSection('ai_overview', e.target.checked)} className="rounded" />
+                          <Sparkles className="w-3.5 h-3.5" /> AI Overview
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editWeather}
+                            onChange={e => { setEditWeather(e.target.checked); toggleSection('weather', e.target.checked) }} className="rounded" />
+                          <CloudSun className="w-3.5 h-3.5" /> Weather
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editFeeds}
+                            onChange={e => { setEditFeeds(e.target.checked); toggleSection('feeds', e.target.checked) }} className="rounded" />
+                          <Rss className="w-3.5 h-3.5" /> RSS Feeds
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editHealth}
+                            onChange={e => { setEditHealth(e.target.checked); toggleSection('health', e.target.checked) }} className="rounded" />
+                          <Heart className="w-3.5 h-3.5" /> Health
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editSectionOrder.includes('unsubscribe')}
+                            onChange={e => toggleSection('unsubscribe', e.target.checked)} className="rounded" />
+                          Unsubscribe
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Options row */}
                     <div className="flex items-center gap-5">
-                      <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <input type="checkbox" checked={editWeather} onChange={e => setEditWeather(e.target.checked)} className="rounded" />
-                        <CloudSun className="w-3.5 h-3.5" /> Weather
-                      </label>
-                      <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <input type="checkbox" checked={editFeeds} onChange={e => setEditFeeds(e.target.checked)} className="rounded" />
-                        <Rss className="w-3.5 h-3.5" /> RSS Feeds
-                      </label>
                       <label className="flex items-center gap-2 text-sm text-muted-foreground">
                         <input type="checkbox" checked={editSinceAny} onChange={e => setEditSinceAny(e.target.checked)} className="rounded" />
                         <Clock className="w-3.5 h-3.5" /> Since last any digest
@@ -412,47 +495,121 @@ export default function DigestsPage() {
                       </label>
                     </div>
 
-                    {/* Section Order */}
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1.5">Section Order</label>
-                      <div className="flex flex-col gap-1">
-                        {editSectionOrder.map((key, idx) => (
-                          <div key={key} className="flex items-center gap-2 bg-secondary/50 rounded-md px-3 py-1.5">
-                            <span className="text-sm text-foreground flex-1">{sectionLabels[key] || key}</span>
-                            <button onClick={() => moveSectionUp(idx)} disabled={idx === 0}
-                              className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-25 transition-colors">
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => moveSectionDown(idx)} disabled={idx >= editSectionOrder.length - 1}
-                              className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-25 transition-colors">
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))}
+                    {/* Section Order — only active sections */}
+                    {editSectionOrder.length > 1 && (
+                      <div>
+                        <label className="text-xs text-muted-foreground block mb-1.5">Section Order</label>
+                        <div className="flex flex-col gap-1">
+                          {editSectionOrder.map((key, idx) => (
+                            <div key={key} className="flex items-center gap-2 bg-secondary/50 rounded-md px-3 py-1.5">
+                              <span className="text-sm text-foreground flex-1">{sectionLabels[key] || key}</span>
+                              <button onClick={() => moveSectionUp(idx)} disabled={idx === 0}
+                                className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-25 transition-colors">
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => moveSectionDown(idx)} disabled={idx >= editSectionOrder.length - 1}
+                                className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-25 transition-colors">
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
-                    {/* Digest Prompt */}
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">
-                        <Sparkles className="w-3 h-3 inline mr-1" />
-                        Digest Prompt (leave empty for default)
-                      </label>
-                      <textarea rows={3} value={editPromptText} onChange={e => setEditPromptText(e.target.value)}
-                        placeholder="e.g. Fasse die Mails kurz auf Deutsch zusammen. Hebe Handlungsbedarf und Fristen hervor."
-                        className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
-                    </div>
+                    {/* AI Overview Prompt */}
+                    {editSectionOrder.includes('ai_overview') && (
+                      <div>
+                        <label className="text-xs text-muted-foreground block mb-1">
+                          <Sparkles className="w-3 h-3 inline mr-1" />
+                          AI Overview Prompt (leave empty for default)
+                        </label>
+                        <textarea rows={3} value={editPromptText} onChange={e => setEditPromptText(e.target.value)}
+                          placeholder="e.g. Fasse die Mails kurz auf Deutsch zusammen. Hebe Handlungsbedarf und Fristen hervor."
+                          className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                      </div>
+                    )}
 
                     {/* Weather Prompt */}
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">
-                        <CloudSun className="w-3 h-3 inline mr-1" />
-                        Weather Prompt (leave empty for default)
-                      </label>
-                      <textarea rows={2} value={editWeatherPrompt} onChange={e => setEditWeatherPrompt(e.target.value)}
-                        placeholder="e.g. Sag mir ob ich eine Jacke brauche und wie die Woche wird."
-                        className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
-                    </div>
+                    {editWeather && (
+                      <div>
+                        <label className="text-xs text-muted-foreground block mb-1">
+                          <CloudSun className="w-3 h-3 inline mr-1" />
+                          Weather Prompt (leave empty for default)
+                        </label>
+                        <textarea rows={2} value={editWeatherPrompt} onChange={e => setEditWeatherPrompt(e.target.value)}
+                          placeholder="e.g. Sag mir ob ich eine Jacke brauche und wie die Woche wird."
+                          className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                      </div>
+                    )}
+
+                    {/* Health Settings */}
+                    {editHealth && (
+                      <div className="border-t border-border pt-3 mt-1 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <Heart className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span className="text-xs font-medium text-muted-foreground">Health Settings</span>
+                          <div className="flex gap-1 ml-auto">
+                            {[7, 30, 90].map(d => (
+                              <button key={d} onClick={() => setEditHealthDays(d)}
+                                className={`px-2.5 py-0.5 text-xs rounded-md transition-colors ${
+                                  editHealthDays === d
+                                    ? 'bg-primary/15 text-primary font-medium'
+                                    : 'text-muted-foreground hover:text-foreground bg-secondary'
+                                }`}>
+                                {d}d
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1.5">Charts im Digest</label>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                            {healthChartOptions.map(opt => (
+                              <label key={opt.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <input type="checkbox"
+                                  checked={editHealthCharts.includes(opt.id)}
+                                  onChange={e => {
+                                    if (e.target.checked) setEditHealthCharts(prev => [...prev, opt.id])
+                                    else setEditHealthCharts(prev => prev.filter(id => id !== opt.id))
+                                  }}
+                                  className="rounded" />
+                                {opt.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1.5">Daten fuer AI Health Summary</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {healthDataTypeOptions.map(opt => (
+                              <label key={opt.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <input type="checkbox"
+                                  checked={editHealthDataTypes.includes(opt.id)}
+                                  onChange={e => {
+                                    if (e.target.checked) setEditHealthDataTypes(prev => [...prev, opt.id])
+                                    else setEditHealthDataTypes(prev => prev.filter(id => id !== opt.id))
+                                  }}
+                                  className="rounded" />
+                                {opt.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1">
+                            <Heart className="w-3 h-3 inline mr-1" />
+                            Health Prompt (leave empty for default)
+                          </label>
+                          <textarea rows={2} value={editHealthPrompt} onChange={e => setEditHealthPrompt(e.target.value)}
+                            placeholder="e.g. Analysiere meine Gesundheitsdaten und gib Empfehlungen."
+                            className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                        </div>
+                      </div>
+                    )}
 
                     {/* Save / Cancel */}
                     <div className="flex items-center gap-2">
@@ -468,6 +625,11 @@ export default function DigestsPage() {
                             digest_prompt: editPromptText || null,
                             weather_prompt: editWeatherPrompt || null,
                             section_order: editSectionOrder,
+                            include_health: editHealth,
+                            health_charts: editHealthCharts.length > 0 ? editHealthCharts : null,
+                            health_prompt: editHealthPrompt || null,
+                            health_data_types: editHealthDataTypes.length > 0 ? editHealthDataTypes : null,
+                            health_days: editHealthDays,
                           })
                           setPolicies(prev => prev.map(p => p.id === policy.id ? updated : p))
                           setEditingSettings(null)
@@ -505,7 +667,7 @@ export default function DigestsPage() {
                 </tr>
               </thead>
               <tbody>
-                {runs.map(run => {
+                {runs.slice(runsPage * RUNS_PER_PAGE, (runsPage + 1) * RUNS_PER_PAGE).map(run => {
                   const policy = policies.find(p => p.id === run.policy_id)
                   return (
                     <tr key={run.id} className="border-b border-border/50">
@@ -539,6 +701,23 @@ export default function DigestsPage() {
                 })}
               </tbody>
             </table>
+            {runs.length > RUNS_PER_PAGE && (
+              <div className="flex items-center justify-between px-4 py-2 border-t border-border">
+                <span className="text-xs text-muted-foreground">
+                  {runsPage * RUNS_PER_PAGE + 1}–{Math.min((runsPage + 1) * RUNS_PER_PAGE, runs.length)} of {runs.length}
+                </span>
+                <div className="flex gap-1">
+                  <button onClick={() => setRunsPage(p => p - 1)} disabled={runsPage === 0}
+                    className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
+                    Prev
+                  </button>
+                  <button onClick={() => setRunsPage(p => p + 1)} disabled={(runsPage + 1) * RUNS_PER_PAGE >= runs.length}
+                    className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

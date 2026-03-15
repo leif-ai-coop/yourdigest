@@ -19,6 +19,11 @@ class DigestPolicyCreate(BaseModel):
     max_tokens: int = Field(4000, ge=100, le=65536)
     since_last_any_digest: bool = False
     section_order: list[str] | None = None
+    include_health: bool = False
+    health_charts: list[str] | None = None
+    health_prompt: str | None = Field(None, max_length=10000)
+    health_data_types: list[str] | None = None
+    health_days: int = 7
 
 
 class DigestPolicyUpdate(BaseModel):
@@ -37,6 +42,11 @@ class DigestPolicyUpdate(BaseModel):
     max_tokens: int | None = Field(None, ge=100, le=65536)
     since_last_any_digest: bool | None = None
     section_order: list[str] | None = None
+    include_health: bool | None = None
+    health_charts: list[str] | None = None
+    health_prompt: str | None = Field(None, max_length=10000)
+    health_data_types: list[str] | None = None
+    health_days: int | None = None
 
 
 class DigestPolicyResponse(BaseModel):
@@ -56,6 +66,11 @@ class DigestPolicyResponse(BaseModel):
     max_tokens: int
     since_last_any_digest: bool
     section_order: str | None
+    include_health: bool
+    health_charts: list[str] | None
+    health_prompt: str | None
+    health_data_types: list[str] | None
+    health_days: int
     created_at: datetime
     updated_at: datetime
 

@@ -25,6 +25,11 @@ class DigestPolicy(Base, UUIDMixin, TimestampMixin):
     max_tokens: Mapped[int] = mapped_column(Integer, default=4000)
     since_last_any_digest: Mapped[bool] = mapped_column(default=False)
     section_order: Mapped[str] = mapped_column(Text, default='["weather","ai_overview","mail","feeds","unsubscribe"]')
+    include_health: Mapped[bool] = mapped_column(default=False)
+    health_charts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    health_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_data_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    health_days: Mapped[int] = mapped_column(Integer, default=7)
 
 
 class DigestRun(Base, UUIDMixin, TimestampMixin):

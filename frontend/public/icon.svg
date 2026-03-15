@@ -1,55 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+<svg width="100%" height="100%" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="24" fill="#0B111E"/>
+
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#1a2744"/>
-      <stop offset="100%" stop-color="#0f1729"/>
+    <linearGradient id="gradMagenta" x1="32" y1="0" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E91E63"/>
+      <stop offset="100%" stop-color="#00E5FF"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#5b9cf6"/>
-      <stop offset="100%" stop-color="#3b7dd8"/>
+    <linearGradient id="gradOrange" x1="32" y1="0" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF9800"/>
+      <stop offset="100%" stop-color="#00E5FF"/>
     </linearGradient>
-    <linearGradient id="glow" x1="200" y1="200" x2="312" y2="312" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#7bb8ff"/>
-      <stop offset="100%" stop-color="#5b9cf6"/>
+    <linearGradient id="gradGreen" x1="32" y1="0" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00E676"/>
+      <stop offset="100%" stop-color="#00E5FF"/>
+    </linearGradient>
+    <linearGradient id="gradPurple" x1="32" y1="0" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7C4DFF"/>
+      <stop offset="100%" stop-color="#00E5FF"/>
     </linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <g>
+    <polygon points="0,16 32,48 32,56 0,40" fill="#E91E63"/>
+    <polygon points="0,40 32,56 32,64 0,64" fill="#FF9800"/>
+    <polygon points="0,64 32,64 32,72 0,88" fill="#00E676"/>
+    <polygon points="0,88 32,72 32,80 0,112" fill="#7C4DFF"/>
+  </g>
 
-  <!-- Incoming data streams (left side - 3 lines converging to center) -->
-  <path d="M 100 140 Q 180 160 220 230" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.5"/>
-  <path d="M 80 256 Q 160 256 220 256" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.65"/>
-  <path d="M 100 372 Q 180 352 220 282" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.5"/>
+  <polygon points="64,64 96,48 96,80 64,96" fill="#0D141F"/>
+  <polygon points="32,48 64,64 64,96 32,80" fill="#121B29"/>
+  <polygon points="64,32 32,48 64,64 96,48" fill="#182436"/>
 
-  <!-- Input dots -->
-  <circle cx="92" cy="140" r="10" fill="#5b9cf6" opacity="0.6"/>
-  <circle cx="72" cy="256" r="10" fill="#5b9cf6" opacity="0.75"/>
-  <circle cx="92" cy="372" r="10" fill="#5b9cf6" opacity="0.6"/>
+  <g>
+    <polygon points="32,48 64,72 64,76 32,56" fill="url(#gradMagenta)"/>
+    <polygon points="32,56 64,76 64,80 32,64" fill="url(#gradOrange)"/>
+    <polygon points="32,64 64,80 64,84 32,72" fill="url(#gradGreen)"/>
+    <polygon points="32,72 64,84 64,88 32,80" fill="url(#gradPurple)"/>
+  </g>
 
-  <!-- Central processing node -->
-  <circle cx="256" cy="256" r="52" fill="url(#glow)" opacity="0.15"/>
-  <circle cx="256" cy="256" r="36" fill="url(#glow)" opacity="0.25"/>
-  <circle cx="256" cy="256" r="22" fill="url(#glow)"/>
+  <polygon points="64,72 96,56 96,72 64,88" fill="#00E5FF"/>
+  <polygon points="64,76 96,60 96,68 64,84" fill="#FFFFFF"/>
 
-  <!-- Inner sparkle/star shape in center -->
-  <path d="M 256 238 L 260 250 L 274 250 L 263 258 L 267 270 L 256 263 L 245 270 L 249 258 L 238 250 L 252 250 Z" fill="#0f1729" opacity="0.8"/>
-
-  <!-- Outgoing processed streams (right side - fanning out) -->
-  <path d="M 292 230 Q 332 180 390 130" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.7"/>
-  <path d="M 292 250 Q 350 250 410 220" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.8"/>
-  <path d="M 292 256 Q 360 256 420 256" stroke="url(#accent)" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
-  <path d="M 292 262 Q 350 262 410 292" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.8"/>
-  <path d="M 292 282 Q 332 332 390 382" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" opacity="0.7"/>
-
-  <!-- Output dots -->
-  <circle cx="396" cy="126" r="9" fill="#5b9cf6" opacity="0.7"/>
-  <circle cx="416" cy="216" r="9" fill="#5b9cf6" opacity="0.8"/>
-  <circle cx="428" cy="256" r="12" fill="#5b9cf6" opacity="0.95"/>
-  <circle cx="416" cy="296" r="9" fill="#5b9cf6" opacity="0.8"/>
-  <circle cx="396" cy="386" r="9" fill="#5b9cf6" opacity="0.7"/>
-
-  <!-- Subtle ring around center -->
-  <circle cx="256" cy="256" r="68" stroke="#5b9cf6" stroke-width="2" fill="none" opacity="0.2"/>
-  <circle cx="256" cy="256" r="90" stroke="#5b9cf6" stroke-width="1.5" fill="none" opacity="0.1" stroke-dasharray="8 6"/>
+  <polygon points="96,56 128,52 128,76 96,72" fill="#00E5FF"/>
+  <polygon points="96,60 128,58 128,70 96,68" fill="#FFFFFF"/>
 </svg>

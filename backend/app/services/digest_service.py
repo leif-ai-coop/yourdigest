@@ -10,6 +10,7 @@ from app.models.classification import MailClassification
 from app.models.digest import DigestPolicy, DigestRun, DigestSection
 from app.models.feed import RssItem
 from app.models.weather import WeatherSnapshot
+from app.models.garmin import GarminSnapshot
 from app.llm.provider import get_llm_provider
 from app.llm.prompt_registry import get_prompt
 from app.services.smtp_client import send_email
@@ -761,6 +762,518 @@ async def generate_ai_summary(
         return None
 
 
+DEFAULT_HEALTH_PROMPT = (
+    "Du bist ein Gesundheitsberater. Analysiere die folgenden Garmin-Gesundheitsdaten "
+    "und gib eine kurze, praktische Zusammenfassung auf Deutsch (3-5 Sätze). "
+    "Erwähne Trends, Auffälligkeiten und Empfehlungen. Sei motivierend aber ehrlich."
+)
+
+# Chart IDs to human-readable labels and their required data types
+HEALTH_CHART_CONFIG = {
+    "body-battery": {"label": "Body Battery", "types": ["body_battery"]},
+    "heart-rate": {"label": "Heart Rate", "types": ["heart_rate"]},
+    "sleep": {"label": "Sleep", "types": ["sleep"]},
+    "steps": {"label": "Steps", "types": ["stats"]},
+    "stress": {"label": "Stress", "types": ["stress"]},
+    "sleep-stress": {"label": "Sleep Stress", "types": ["stress", "sleep"]},
+    "hrv": {"label": "HRV", "types": ["hrv"]},
+    "spo2": {"label": "SpO2", "types": ["spo2"]},
+    "weight": {"label": "Weight", "types": ["weight"]},
+    "floors": {"label": "Floors", "types": ["stats"]},
+    "training-load": {"label": "Training Load", "types": ["activities", "maxmet"]},
+    "fitness-age": {"label": "Fitness Age", "types": ["fitnessage"]},
+    "vo2max": {"label": "VO2max", "types": ["maxmet"]},
+    "intensity": {"label": "Intensity Minutes", "types": ["intensity_minutes"]},
+    "activities": {"label": "Activities", "types": ["activities"]},
+}
+
+# Data types available for LLM health summary
+HEALTH_DATA_TYPE_LABELS = {
+    "stats": "Daily Stats (Steps, Floors, Calories)",
+    "sleep": "Sleep (Duration, Stages)",
+    "heart_rate": "Heart Rate (Resting, Max)",
+    "body_battery": "Body Battery",
+    "stress": "Stress Levels",
+    "hrv": "HRV (Heart Rate Variability)",
+    "spo2": "SpO2 (Blood Oxygen)",
+    "weight": "Weight",
+    "activities": "Activities (Training Load)",
+    "intensity_minutes": "Intensity Minutes",
+    "fitnessage": "Fitness Age",
+    "maxmet": "VO2max",
+}
+
+
+async def collect_health_data(
+    db: AsyncSession, data_types: list[str], days: int = 7
+) -> dict[str, list[dict]]:
+    """Collect Garmin health snapshots for selected data types."""
+    from datetime import date as date_type
+    end = date_type.today()
+    start = end - timedelta(days=days - 1)
+
+    result = await db.execute(
+        select(GarminSnapshot).where(
+            GarminSnapshot.data_type.in_(data_types),
+            GarminSnapshot.date >= start,
+            GarminSnapshot.date <= end,
+        ).order_by(GarminSnapshot.date.asc())
+    )
+    snapshots = result.scalars().all()
+
+    grouped: dict[str, list[dict]] = {}
+    for s in snapshots:
+        if s.data_type not in grouped:
+            grouped[s.data_type] = []
+        grouped[s.data_type].append({"date": s.date.isoformat(), "data": s.data})
+    return grouped
+
+
+def _extract_health_text(health_data: dict[str, list[dict]]) -> str:
+    """Convert health data into readable text for LLM."""
+    lines = []
+    for dtype, snapshots in health_data.items():
+        lines.append(f"\n=== {HEALTH_DATA_TYPE_LABELS.get(dtype, dtype)} ===")
+        for s in snapshots[-7:]:  # Last 7 entries max
+            d = s["data"] or {}
+            date_str = s["date"]
+            if dtype == "stats":
+                lines.append(f"  {date_str}: Steps={d.get('totalSteps',0)}, Floors={d.get('floorsAscended',0)}, Calories={d.get('totalKilocalories',0)}")
+            elif dtype == "sleep":
+                dto = d.get("dailySleepDTO", d)
+                deep = round((dto.get("deepSleepSeconds", 0)) / 3600, 1)
+                light = round((dto.get("lightSleepSeconds", 0)) / 3600, 1)
+                rem = round((dto.get("remSleepSeconds", 0)) / 3600, 1)
+                total = round(deep + light + rem, 1)
+                lines.append(f"  {date_str}: Total={total}h (Deep={deep}h, Light={light}h, REM={rem}h)")
+            elif dtype == "heart_rate":
+                lines.append(f"  {date_str}: Resting={d.get('restingHeartRate','-')}, Max={d.get('maxHeartRate','-')}")
+            elif dtype == "body_battery":
+                bb = d if not isinstance(d, list) else (d[0] if d else {})
+                lines.append(f"  {date_str}: Charged={bb.get('charged','-')}, Drained={bb.get('drained','-')}")
+            elif dtype == "stress":
+                lines.append(f"  {date_str}: Avg={d.get('avgStressLevel','-')}, Max={d.get('maxStressLevel','-')}")
+            elif dtype == "hrv":
+                summary = d.get("hrvSummary", {})
+                baseline = summary.get("baseline", {})
+                lines.append(f"  {date_str}: LastNightAvg={summary.get('lastNightAvg','-')}, WeeklyAvg={summary.get('weeklyAvg','-')}, Status={summary.get('status','-')}, Baseline={baseline.get('balancedLow','-')}-{baseline.get('balancedUpper','-')}")
+            elif dtype == "spo2":
+                lines.append(f"  {date_str}: Avg={d.get('averageSpO2', d.get('latestSpO2','-'))}%")
+            elif dtype == "weight":
+                wl = d.get("dateWeightList", [])
+                w = (wl[0].get("weight", 0) if wl else 0)
+                if w > 1000:
+                    w = w / 1000
+                lines.append(f"  {date_str}: {round(w, 1)} kg")
+            elif dtype == "activities":
+                acts = d if isinstance(d, list) else d.get("ActivitiesForDay", {}).get("payload", [])
+                for a in (acts if isinstance(acts, list) else []):
+                    atype = a.get("activityType", {})
+                    name = atype.get("typeKey", atype) if isinstance(atype, dict) else atype
+                    lines.append(f"  {date_str}: {name}, Duration={round(a.get('duration',0)/60)}min, Load={a.get('activityTrainingLoad',0)}")
+            elif dtype == "intensity_minutes":
+                mod = d.get("moderateMinutes", 0)
+                vig = d.get("vigorousMinutes", 0)
+                lines.append(f"  {date_str}: Moderate={mod}min, Vigorous={vig}min (x2={vig*2}min), Total={d.get('endDayMinutes',0)}min")
+            elif dtype == "fitnessage":
+                lines.append(f"  {date_str}: FitnessAge={d.get('fitnessAge','-')}, ChronAge={d.get('chronologicalAge','-')}")
+            elif dtype == "maxmet":
+                entries = d if isinstance(d, list) else [d]
+                for e in entries:
+                    if not e:
+                        continue
+                    run_v = (e.get("generic", {}) or {}).get("vo2MaxPreciseValue", "-")
+                    cyc_v = (e.get("cycling", {}) or {}).get("vo2MaxPreciseValue", "-")
+                    lines.append(f"  {date_str}: Running={run_v}, Cycling={cyc_v}")
+            else:
+                lines.append(f"  {date_str}: {str(d)[:200]}")
+    return "\n".join(lines)
+
+
+def _fmt_date_short(date_str: str) -> str:
+    """Format ISO date to DD.MM."""
+    parts = date_str.split("-")
+    return f"{parts[2]}.{parts[1]}" if len(parts) == 3 else date_str
+
+
+def _bar_html(pct: float, color: str = "#3b82f6", label: str = "") -> str:
+    """Render an inline horizontal bar for email."""
+    pct = max(0, min(100, pct))
+    return (
+        f'<td style="padding:3px 0;width:60%;">'
+        f'<div style="background:#1a2540;border-radius:4px;height:18px;position:relative;">'
+        f'<div style="background:{color};border-radius:4px;height:18px;width:{pct}%;min-width:2px;"></div>'
+        f'</div></td>'
+        f'<td style="padding:3px 6px;color:#d4dae4;font-size:11px;white-space:nowrap;">{label}</td>'
+    )
+
+
+def _stacked_bar_html(segments: list[tuple[float, str]], labels: str = "") -> str:
+    """Render stacked bar segments."""
+    bar_parts = ""
+    for pct, color in segments:
+        if pct > 0:
+            bar_parts += f'<div style="background:{color};height:18px;width:{pct}%;display:inline-block;"></div>'
+    return (
+        f'<td style="padding:3px 0;width:55%;">'
+        f'<div style="background:#1a2540;border-radius:4px;height:18px;overflow:hidden;font-size:0;line-height:0;">{bar_parts}</div></td>'
+        f'<td style="padding:3px 6px;color:#d4dae4;font-size:11px;white-space:nowrap;">{labels}</td>'
+    )
+
+
+def _render_health_chart_html(chart_id: str, health_data: dict[str, list[dict]]) -> str:
+    """Render a single health chart as visual HTML bars for email digest."""
+    import html as html_mod
+    config = HEALTH_CHART_CONFIG.get(chart_id)
+    if not config:
+        return ""
+
+    label = config["label"]
+    row_html = ""
+
+    if chart_id == "body-battery":
+        for s in health_data.get("body_battery", []):
+            d = s["data"]
+            if isinstance(d, list):
+                d = d[0] if d else {}
+            vals = d.get("bodyBatteryValuesArray", [])
+            mx = 0
+            for v in (vals or []):
+                val = v[1] if isinstance(v, list) else v
+                if isinstance(val, (int, float)) and val > mx:
+                    mx = val
+            if mx == 0:
+                mx = d.get("charged", 0) or 0
+            color = "#22c55e" if mx >= 60 else "#f97316" if mx >= 30 else "#ef4444"
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(mx, color, f"{mx}%")}</tr>'
+
+    elif chart_id == "heart-rate":
+        entries = health_data.get("heart_rate", [])
+        max_hr = max((s["data"].get("maxHeartRate", 0) or 0) for s in entries) if entries else 200
+        max_hr = max(max_hr, 100)
+        for s in entries:
+            d = s["data"] or {}
+            resting = d.get("restingHeartRate", 0) or 0
+            mx = d.get("maxHeartRate", 0) or 0
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>'
+            row_html += _stacked_bar_html([
+                (resting / max_hr * 100, "#ef4444"),
+                ((mx - resting) / max_hr * 100, "#f9731640"),
+            ], f"Rest {resting} / Max {mx}")
+            row_html += '</tr>'
+
+    elif chart_id == "sleep":
+        for s in health_data.get("sleep", []):
+            d = s["data"] or {}
+            dto = d.get("dailySleepDTO", d)
+            deep = dto.get("deepSleepSeconds", 0) / 3600
+            light = dto.get("lightSleepSeconds", 0) / 3600
+            rem = dto.get("remSleepSeconds", 0) / 3600
+            awake = dto.get("awakeSleepSeconds", 0) / 3600
+            total = deep + light + rem + awake
+            scale = 10  # 10h = 100%
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>'
+            row_html += _stacked_bar_html([
+                (deep / scale * 100, "#6366f1"),
+                (light / scale * 100, "#3b82f6"),
+                (rem / scale * 100, "#a855f7"),
+                (awake / scale * 100, "#f97316"),
+            ], f"{round(total, 1)}h")
+            row_html += '</tr>'
+
+    elif chart_id == "steps":
+        entries = health_data.get("stats", [])
+        max_steps = max((s["data"].get("totalSteps", 0) or 0) for s in entries) if entries else 10000
+        max_steps = max(max_steps, 1000)
+        for s in entries:
+            d = s["data"] or {}
+            steps = d.get("totalSteps", 0) or 0
+            goal = d.get("dailyStepGoal", 10000) or 10000
+            color = "#22c55e" if steps >= goal else "#3b82f6"
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(steps / max_steps * 100, color, f"{steps:,}")}</tr>'
+
+    elif chart_id == "stress":
+        for s in health_data.get("stress", []):
+            d = s["data"] or {}
+            avg = d.get("avgStressLevel", 0) or 0
+            color = "#22c55e" if avg <= 25 else "#f97316" if avg <= 50 else "#ef4444"
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(avg, color, str(avg))}</tr>'
+
+    elif chart_id == "sleep-stress":
+        sleep_times = {}
+        for s in health_data.get("sleep", []):
+            dto = (s["data"] or {}).get("dailySleepDTO", s["data"] or {})
+            start, end = dto.get("sleepStartTimestampGMT"), dto.get("sleepEndTimestampGMT")
+            if start and end:
+                sleep_times[s["date"]] = (start, end)
+        for s in health_data.get("stress", []):
+            d = s["data"] or {}
+            window = sleep_times.get(s["date"])
+            vals = d.get("stressValuesArray", [])
+            if window and vals:
+                sv = [v[1] for v in vals if v[0] >= window[0] and v[0] <= window[1] and v[1] > 0]
+                if sv:
+                    avg = round(sum(sv) / len(sv))
+                    color = "#a855f7" if avg <= 25 else "#f97316" if avg <= 40 else "#ef4444"
+                    row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(avg, color, str(avg))}</tr>'
+
+    elif chart_id == "hrv":
+        entries = health_data.get("hrv", [])
+        all_vals = []
+        for s in entries:
+            summary = (s["data"] or {}).get("hrvSummary", {})
+            v = summary.get("lastNightAvg", 0) or 0
+            bl = summary.get("baseline", {})
+            if bl.get("balancedUpper"):
+                all_vals.append(bl["balancedUpper"])
+            all_vals.append(v)
+        max_val = max(all_vals) * 1.2 if all_vals else 80
+        for s in entries:
+            summary = (s["data"] or {}).get("hrvSummary", {})
+            v = summary.get("lastNightAvg", 0) or 0
+            status = summary.get("status", "")
+            bl = summary.get("baseline", {})
+            color = "#22c55e" if status == "BALANCED" else "#f97316" if status == "UNBALANCED" else "#ef4444"
+            bl_text = f" [{bl.get('balancedLow', '')}-{bl.get('balancedUpper', '')}]" if bl.get("balancedLow") else ""
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(v / max_val * 100, color, f"{v}ms{bl_text}")}</tr>'
+
+    elif chart_id == "spo2":
+        for s in health_data.get("spo2", []):
+            d = s["data"] or {}
+            val = d.get("averageSpO2", d.get("latestSpO2", 0)) or 0
+            if val > 0:
+                color = "#22c55e" if val >= 95 else "#f97316" if val >= 90 else "#ef4444"
+                row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(val, color, f"{val}%")}</tr>'
+
+    elif chart_id == "weight":
+        entries = health_data.get("weight", [])
+        weights = []
+        for s in entries:
+            d = s["data"] or {}
+            wl = d.get("dateWeightList", [])
+            w = (wl[0].get("weight", 0) if wl else d.get("totalAverage", {}).get("weight", 0)) or 0
+            if w > 1000:
+                w = w / 1000
+            weights.append((s["date"], round(w, 1)))
+        vals = [w for _, w in weights if w > 0]
+        if vals:
+            mn, mx = min(vals), max(vals)
+            rng = max(mx - mn, 1)
+            for dt, w in weights:
+                if w > 0:
+                    pct = (w - mn + rng * 0.1) / (rng * 1.2) * 100
+                    row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(dt)}</td>{_bar_html(pct, "#9ca3af", f"{w}kg")}</tr>'
+
+    elif chart_id == "floors":
+        entries = health_data.get("stats", [])
+        max_fl = max((s["data"].get("floorsAscended", 0) or 0) for s in entries) if entries else 10
+        max_fl = max(max_fl, 1)
+        for s in entries:
+            d = s["data"] or {}
+            fl = d.get("floorsAscended", 0) or 0
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>{_bar_html(fl / max_fl * 100, "#14b8a6", str(fl))}</tr>'
+
+    elif chart_id == "intensity":
+        for s in health_data.get("intensity_minutes", []):
+            d = s["data"] or {}
+            mod = d.get("moderateMinutes", 0) or 0
+            vig = (d.get("vigorousMinutes", 0) or 0) * 2
+            total = mod + vig
+            goal = d.get("weekGoal", 150) or 150
+            row_html += f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>'
+            row_html += _stacked_bar_html([
+                (mod / goal * 100, "#eab308"),
+                (vig / goal * 100, "#ef4444"),
+            ], f"{total}/{d.get('endDayMinutes', total)}min")
+            row_html += '</tr>'
+
+    elif chart_id == "activities":
+        for s in health_data.get("activities", []):
+            d = s["data"] or {}
+            acts = d if isinstance(d, list) else d.get("ActivitiesForDay", {}).get("payload", [])
+            for a in (acts if isinstance(acts, list) else []):
+                atype = a.get("activityType", {})
+                name = (atype.get("typeKey", atype) if isinstance(atype, dict) else str(atype))[:20]
+                dur = round(a.get("duration", 0) / 60)
+                dist = a.get("distance", 0) or 0
+                dist_str = f"{round(dist/1000,1)}km" if dist >= 1000 else f"{round(dist)}m"
+                hr = a.get("averageHR", a.get("averageHeartRate", "-"))
+                row_html += (
+                    f'<tr><td style="padding:3px 6px;color:#7a8ba8;font-size:11px;white-space:nowrap;width:50px;">{_fmt_date_short(s["date"])}</td>'
+                    f'<td colspan="2" style="padding:3px 6px;color:#d4dae4;font-size:11px;">'
+                    f'{html_mod.escape(name)} · {dur}min · {dist_str} · HR {hr}</td></tr>'
+                )
+
+    elif chart_id == "fitness-age":
+        entries = health_data.get("fitnessage", [])
+        if entries:
+            latest = entries[-1]["data"] or {}
+            fa = latest.get("fitnessAge", 0)
+            ca = latest.get("chronologicalAge", 0)
+            diff = ca - fa
+            color = "#22c55e" if diff > 0 else "#f97316" if diff == 0 else "#ef4444"
+            row_html = (
+                f'<tr><td colspan="3" style="padding:6px;text-align:center;">'
+                f'<span style="font-size:28px;font-weight:700;color:{color};">{fa}</span>'
+                f'<span style="font-size:12px;color:#7a8ba8;margin-left:6px;">vs {ca} ({("+" if diff < 0 else "-")}{abs(diff)} Jahre)</span>'
+                f'</td></tr>'
+            )
+
+    elif chart_id == "vo2max":
+        entries = health_data.get("maxmet", [])
+        if entries:
+            latest_data = entries[-1]["data"]
+            latest = latest_data[0] if isinstance(latest_data, list) else latest_data
+            if latest:
+                rv = (latest.get("generic", {}) or {}).get("vo2MaxPreciseValue", 0) or 0
+                cv = (latest.get("cycling", {}) or {}).get("vo2MaxPreciseValue", 0) or 0
+                parts = []
+                if rv:
+                    parts.append(f'<span style="color:#22c55e;font-size:20px;font-weight:700;">{rv}</span><span style="color:#7a8ba8;font-size:11px;margin:0 8px;">Running</span>')
+                if cv:
+                    parts.append(f'<span style="color:#3b82f6;font-size:20px;font-weight:700;">{cv}</span><span style="color:#7a8ba8;font-size:11px;margin:0 8px;">Cycling</span>')
+                row_html = f'<tr><td colspan="3" style="padding:6px;text-align:center;">{"".join(parts)}</td></tr>'
+
+    elif chart_id == "training-load":
+        # Calculate VO2max-based optimal zone (same logic as frontend)
+        vo2max = 50
+        for s in health_data.get("maxmet", []):
+            entries_list = s["data"] if isinstance(s["data"], list) else [s["data"]]
+            for e in entries_list:
+                if not e:
+                    continue
+                for src in [e.get("generic"), e.get("cycling")]:
+                    if src:
+                        v = src.get("vo2MaxPreciseValue") or src.get("vo2MaxValue") or 0
+                        if v > vo2max:
+                            vo2max = round(v)
+        opt_center = vo2max * 5
+        opt_low = round(opt_center * 0.7)
+        opt_high = round(opt_center * 1.3)
+
+        # Calculate EWMA-based acute load
+        activity_entries = health_data.get("activities", [])
+        daily_loads: dict[str, float] = {}
+        for s in activity_entries:
+            d = s["data"] or {}
+            acts = d if isinstance(d, list) else d.get("ActivitiesForDay", {}).get("payload", [])
+            daily_loads[s["date"]] = sum(a.get("activityTrainingLoad", 0) for a in (acts if isinstance(acts, list) else []))
+
+        # Fill gaps and compute EWMA
+        if daily_loads:
+            all_dates = sorted(daily_loads.keys())
+            from datetime import date as date_cls
+            start_d = date_cls.fromisoformat(all_dates[0])
+            end_d = date_cls.fromisoformat(all_dates[-1])
+            alpha7 = 2 / (7 + 1)
+            ewma7 = 0.0
+            d = start_d
+            while d <= end_d:
+                iso = d.isoformat()
+                v = daily_loads.get(iso, 0)
+                ewma7 = alpha7 * v + (1 - alpha7) * ewma7
+                d += timedelta(days=1)
+            acute = round(ewma7 * 7.5)
+        else:
+            acute = 0
+
+        # Render as single zone bar
+        bar_max = max(opt_high * 1.3, acute * 1.15, opt_high + 50)
+        acute_pct = acute / bar_max * 100
+        zone_left = opt_low / bar_max * 100
+        zone_width = (opt_high - opt_low) / bar_max * 100
+
+        if acute < opt_low:
+            color = "#3b82f6"
+            status = "Low"
+        elif acute <= opt_high:
+            color = "#22c55e"
+            status = "Optimal"
+        elif acute <= opt_high * 1.3:
+            color = "#f97316"
+            status = "High"
+        else:
+            color = "#ef4444"
+            status = "Very High"
+
+        row_html = f"""
+        <tr><td colspan="3" style="padding:8px 6px;">
+          <div style="position:relative;background:#1a2540;border-radius:6px;height:28px;overflow:visible;">
+            <div style="position:absolute;left:{zone_left}%;width:{zone_width}%;top:0;height:28px;background:#22c55e20;border-left:2px solid #22c55e40;border-right:2px solid #22c55e40;border-radius:4px;"></div>
+            <div style="position:absolute;left:0;width:{acute_pct}%;top:4px;height:20px;background:{color};border-radius:4px;min-width:4px;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;">
+            <span style="font-size:11px;color:#7a8ba8;">0</span>
+            <span style="font-size:11px;color:#22c55e;">{opt_low}–{opt_high}</span>
+            <span style="font-size:11px;color:#7a8ba8;">{round(bar_max)}</span>
+          </div>
+          <div style="text-align:center;margin-top:2px;">
+            <span style="font-size:18px;font-weight:700;color:{color};">{acute}</span>
+            <span style="font-size:12px;color:#7a8ba8;margin-left:6px;">{status}</span>
+          </div>
+        </td></tr>"""
+
+    if not row_html:
+        return ""
+
+    return f"""
+    <div style="margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:6px;padding-left:6px;">{html_mod.escape(label)}</div>
+      <table style="width:100%;border-collapse:collapse;">{row_html}</table>
+    </div>"""
+
+
+def render_health_section(health_data: dict[str, list[dict]], chart_ids: list[str], ai_summary: str | None = None) -> str:
+    """Render the full health section for digest email."""
+    if not health_data:
+        return ""
+
+    charts_html = ""
+    for cid in chart_ids:
+        charts_html += _render_health_chart_html(cid, health_data)
+
+    summary_html = ""
+    if ai_summary:
+        summary_html = f"""
+      <div style="background:#1a2540;border-left:3px solid #22c55e;padding:12px 16px;margin:0 0 12px 0;border-radius:0 8px 8px 0;font-size:13px;line-height:1.6;color:#a0aec0;">
+        {_safe_llm_html(ai_summary)}
+      </div>"""
+
+    return f"""
+  <div class="section">
+    <div class="section-header" style="background:linear-gradient(135deg,#1a2744,#1a3a2a);"><h2>💚 Health</h2></div>
+    <div class="section-body">
+      {summary_html}
+      {charts_html}
+    </div>
+  </div>"""
+
+
+async def generate_health_summary(
+    db: AsyncSession, health_data: dict[str, list[dict]], custom_prompt: str | None = None
+) -> str | None:
+    """Generate a health summary via LLM."""
+    try:
+        provider = get_llm_provider()
+        health_text = _extract_health_text(health_data)
+        if not health_text.strip():
+            return None
+
+        system_prompt = custom_prompt or DEFAULT_HEALTH_PROMPT
+        result = await provider.chat_and_log(
+            db, "health_summary",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": health_text},
+            ],
+            max_tokens=500,
+        )
+        return result.get("content", "").strip()
+    except Exception as e:
+        logger.error(f"Health LLM summary failed: {e}")
+        return None
+
+
 async def compose_digest(
     db: AsyncSession, policy: DigestPolicy, override_since: datetime | None = None
 ) -> DigestRun:
@@ -820,7 +1333,27 @@ async def compose_digest(
         if policy.include_feeds:
             feed_items = await collect_feed_items(db, since, limit=200)
 
-        total_items = len(mail_items) + len(feed_items) + (1 if weather_data else 0)
+        # Collect health data
+        health_data = {}
+        health_ai_summary = None
+        if policy.include_health:
+            chart_ids = policy.health_charts or []
+            llm_data_types = policy.health_data_types or []
+            # Collect data types needed for charts + LLM
+            needed_types = set(llm_data_types)
+            for cid in chart_ids:
+                cfg = HEALTH_CHART_CONFIG.get(cid)
+                if cfg:
+                    needed_types.update(cfg["types"])
+            if needed_types:
+                health_data = await collect_health_data(db, list(needed_types), days=policy.health_days or 7)
+            # Generate LLM health summary if data types selected for LLM
+            if llm_data_types and health_data:
+                llm_health_data = {k: v for k, v in health_data.items() if k in llm_data_types}
+                if llm_health_data:
+                    health_ai_summary = await generate_health_summary(db, llm_health_data, policy.health_prompt)
+
+        total_items = len(mail_items) + len(feed_items) + (1 if weather_data else 0) + (1 if health_data else 0)
         run.item_count = total_items
 
         # Load display thresholds
@@ -864,10 +1397,18 @@ async def compose_digest(
             ))
             order += 1
 
+        if health_data and policy.health_charts:
+            db.add(DigestSection(
+                run_id=run.id, section_type="health", title="Health",
+                content=render_health_section(health_data, policy.health_charts, health_ai_summary), order=order,
+            ))
+            order += 1
+
         # Build section blocks
         section_blocks = {
             "weather": render_weather_section(weather_data, weather_ai_summary) if weather_data else "",
             "ai_overview": "",
+            "health": render_health_section(health_data, policy.health_charts or [], health_ai_summary) if health_data and policy.health_charts else "",
             "mail": render_mail_section(mail_items, detail_threshold, compact_threshold),
             "feeds": render_feed_section(feed_items) if feed_items else "",
             "unsubscribe": render_unsubscribe_section(mail_items),
@@ -883,19 +1424,15 @@ async def compose_digest(
 
         # Determine section order from policy
         import json as _json
-        default_order = ["weather", "ai_overview", "mail", "feeds", "unsubscribe"]
+        default_order = ["weather", "health", "ai_overview", "mail", "feeds", "unsubscribe"]
         try:
             order_list = _json.loads(policy.section_order) if policy.section_order else default_order
         except (ValueError, TypeError):
             order_list = default_order
 
-        # Weather always goes into the weather_section slot (top banner)
-        # Other sections go into sections slot in configured order
-        weather_html = section_blocks.get("weather", "") if "weather" in order_list else ""
+        # All sections go through the configured order
         ordered_sections = ""
         for key in order_list:
-            if key == "weather":
-                continue  # handled separately as top banner
             block = section_blocks.get(key, "")
             if block:
                 ordered_sections += block
@@ -903,8 +1440,8 @@ async def compose_digest(
         run.html_content = DIGEST_HTML_TEMPLATE.format(
             date=now.strftime("%A, %B %d, %Y"),
             item_count=total_items,
-            weather_section=weather_html,
-            ai_summary_section="",  # now part of ordered sections
+            weather_section="",
+            ai_summary_section="",
             sections=ordered_sections,
         )
 

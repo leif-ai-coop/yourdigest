@@ -12,9 +12,17 @@ from app.schemas.digest import (
 )
 from app.schemas.common import MessageResponse
 from app.exceptions import NotFoundError
-from app.services.digest_service import compose_digest
+from app.services.digest_service import compose_digest, HEALTH_CHART_CONFIG, HEALTH_DATA_TYPE_LABELS
 
 router = APIRouter()
+
+
+@router.get("/health-options")
+async def get_health_options():
+    """Return available health chart IDs and data types for digest settings."""
+    charts = [{"id": k, "label": v["label"]} for k, v in HEALTH_CHART_CONFIG.items()]
+    data_types = [{"id": k, "label": v} for k, v in HEALTH_DATA_TYPE_LABELS.items()]
+    return {"charts": charts, "data_types": data_types}
 
 
 # --- Policies ---

@@ -64,7 +64,7 @@ export default function Layout() {
           <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center overflow-hidden flex-shrink-0">
             <AppIcon className="w-7 h-7 text-background" />
           </div>
-          <span className="text-sm font-semibold tracking-tight whitespace-nowrap">CuraOS Assistant</span>
+          <span className="text-sm font-semibold tracking-tight whitespace-nowrap">You Digest</span>
         </div>
 
         {/* Navigation */}
@@ -91,7 +91,7 @@ export default function Layout() {
         {/* Footer */}
         <div className="px-5 py-4 border-t border-border min-w-[14rem] flex items-center justify-between">
           <div className="text-xs text-muted-foreground whitespace-nowrap">
-            assistant.curaos.de
+            You Digest
           </div>
           <a
             href="/outpost.goauthentik.io/sign_out"

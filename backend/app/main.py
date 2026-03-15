@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     logger.info("Assistant API shutting down")
 
 
-app = FastAPI(title="Mail Assistant", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="You Digest", version="0.1.0", lifespan=lifespan)
 
 # Rate Limiting
 limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])

@@ -265,7 +265,7 @@ export default function AssistantPage() {
             <div className="h-full flex items-center justify-center">
               <EmptyState
                 icon={MessageSquare}
-                title="CuraOS Assistant"
+                title="You Digest Assistant"
                 description="Frage mich etwas zu deinen E-Mails, Digests oder Einstellungen."
               />
             </div>

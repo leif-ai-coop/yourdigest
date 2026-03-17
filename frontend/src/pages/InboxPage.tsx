@@ -9,7 +9,7 @@ import {
   Inbox, Star, Archive, Eye, EyeOff, ChevronLeft,
   RefreshCw, Sparkles, Paperclip, Link2, AlertCircle,
   PenLine, Copy, Check, X, Send, Trash2, MailX,
-  FolderOpen
+  FolderOpen, Package
 } from 'lucide-react'
 
 interface MailMessage {
@@ -33,6 +33,7 @@ interface MailMessage {
   attachments?: { id: string; filename: string | null; content_type: string | null; size_bytes: number | null }[]
   links?: { id: string; url: string; text: string | null; domain: string | null }[]
   classifications?: { category: string; confidence: number; priority: number; summary: string | null; action_required: boolean }[]
+  tracking_codes?: { carrier: string; code: string; url: string }[] | null
 }
 
 interface Classification {
@@ -49,7 +50,47 @@ interface Classification {
 }
 
 function stripStyleTags(html: string): string {
-  return html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+  // Remove <style> blocks
+  let cleaned = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+
+  // DOM-based cleanup
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(`<div>${cleaned}</div>`, 'text/html')
+
+    // 1. Remove text nodes that look like CSS
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+    const toRemove: Node[] = []
+    while (walker.nextNode()) {
+      const text = walker.currentNode.textContent || ''
+      if (text.length > 50 && (text.match(/\{/g) || []).length >= 2 &&
+          /(?:margin|padding|font-size|display|color|border|width|height|text-decoration|background)\s*:/i.test(text)) {
+        toRemove.push(walker.currentNode)
+      }
+    }
+    for (const node of toRemove) node.parentNode?.removeChild(node)
+
+    // 2. Sanitize width attributes and problematic inline styles
+    const allEls = doc.body.querySelectorAll('*')
+    for (const el of allEls) {
+      // Remove width/height HTML attributes on tables, tds, divs, imgs
+      el.removeAttribute('width')
+      el.removeAttribute('height')
+
+      // Sanitize inline styles
+      const style = el.getAttribute('style')
+      if (style) {
+        const sanitized = style
+          .replace(/\b(?:min-)?width\s*:\s*\d+(?:px|pt)\s*;?/gi, '')
+          .replace(/\bwhite-space\s*:\s*nowrap\s*;?/gi, '')
+        el.setAttribute('style', sanitized)
+      }
+    }
+
+    cleaned = doc.body.firstElementChild?.innerHTML || cleaned
+  } catch { /* fallback to regex-cleaned version */ }
+
+  return cleaned
 }
 
 function extractSender(from: string): { name: string; email: string } {
@@ -80,12 +121,15 @@ export default function InboxPage() {
   const [sent, setSent] = useState(false)
   const [replyTo, setReplyTo] = useState('')
   const [replySubject, setReplySubject] = useState('')
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 50
 
   const loadMessages = useCallback(async () => {
     try {
-      let url = `/mail/messages?page_size=100&folder=${encodeURIComponent(activeFolder)}`
+      let url = `/mail/messages?page=${page}&page_size=${PAGE_SIZE}&folder=${encodeURIComponent(activeFolder)}`
       if (!showArchived) url += '&is_archived=false'
       if (filter === 'unread') url += '&is_read=false'
+      if (filter === 'flagged') url += '&is_flagged=true'
       const data = await api.get<MailMessage[]>(url)
       setMessages(data)
     } catch (e) {
@@ -93,7 +137,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, showArchived, activeFolder])
+  }, [filter, showArchived, activeFolder, page])
 
   useEffect(() => { loadMessages() }, [loadMessages])
 
@@ -241,9 +285,9 @@ export default function InboxPage() {
   if (loading) return <PageSpinner />
 
   return (
-    <div className="flex h-[calc(100vh-48px)] -m-6">
+    <div className="flex h-full md:h-[calc(100vh-48px)] -m-3 md:-m-6 min-w-0 w-[calc(100%+1.5rem)] md:w-[calc(100%+3rem)]">
       {/* Mail List */}
-      <div className={`${deepLinked && selected ? 'hidden' : selected ? 'w-96' : 'flex-1'} border-r border-border flex flex-col bg-background`}>
+      <div className={`${deepLinked && selected ? 'hidden' : selected ? 'hidden md:flex md:w-96' : 'flex-1'} border-r border-border flex flex-col bg-background min-w-0`}>
         {/* Folder Tabs */}
         {folders.length > 1 && (
           <div className="flex items-center gap-1 px-4 py-2 border-b border-border overflow-x-auto">
@@ -254,6 +298,7 @@ export default function InboxPage() {
                   setActiveFolder(f.folder)
                   setSelected(null)
                   setDeepLinked(false)
+                  setPage(1)
                   setSearchParams({}, { replace: true })
                 }}
                 className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md whitespace-nowrap transition-colors ${
@@ -276,7 +321,7 @@ export default function InboxPage() {
             {(['all', 'unread', 'flagged'] as const).map(f => (
               <button
                 key={f}
-                onClick={() => setFilter(f)}
+                onClick={() => { setFilter(f); setPage(1) }}
                 className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                   filter === f
                     ? 'bg-primary/15 text-primary font-medium'
@@ -329,6 +374,7 @@ export default function InboxPage() {
                         <span className={`text-sm truncate ${!msg.is_read ? 'font-semibold text-foreground' : ''}`}>
                           {sender.name}
                         </span>
+                        {msg.tracking_codes && msg.tracking_codes.length > 0 && <Package className="w-3 h-3 text-amber-400 flex-shrink-0" />}
                         {msg.is_flagged && <Star className="w-3 h-3 text-amber-400 fill-amber-400 flex-shrink-0" />}
                       </div>
                       <div className={`text-sm truncate mb-0.5 ${!msg.is_read ? 'text-foreground' : 'text-muted-foreground'}`}>
@@ -366,52 +412,60 @@ export default function InboxPage() {
           )}
         </div>
 
-        <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
-          {messages.length} messages
+        <div className="px-2 py-1.5 border-t border-border flex items-center justify-center gap-3">
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+            className="px-2.5 py-1 text-xs rounded bg-secondary text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors">
+            &larr; Prev
+          </button>
+          <span className="text-xs text-muted-foreground">{page}</span>
+          <button onClick={() => setPage(p => p + 1)} disabled={messages.length < PAGE_SIZE}
+            className="px-2.5 py-1 text-xs rounded bg-secondary text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors">
+            Next &rarr;
+          </button>
         </div>
       </div>
 
       {/* Detail Panel */}
       {selected && (
-        <div className="flex-1 flex flex-col bg-background overflow-hidden">
+        <div className="flex-1 w-full md:w-auto flex flex-col bg-background overflow-hidden min-w-0">
           {/* Detail Header */}
-          <div className="px-6 py-4 border-b border-border">
-            <div className="flex items-center gap-3 mb-3">
+          <div className="px-3 md:px-6 py-3 md:py-4 border-b border-border">
+            <div className="flex items-center gap-2 mb-2">
               <button
                 onClick={clearSelection}
-                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <div className="flex items-center gap-2 flex-1">
+              <div className="flex items-center gap-2 flex-1 min-w-0 overflow-x-auto">
                 {selected.classifications?.map((c, i) => (
                   <CategoryBadge key={i} category={c.category} />
                 ))}
                 {selected.classifications?.some(c => c.action_required) && (
-                  <span className="flex items-center gap-1 text-xs text-amber-400">
+                  <span className="flex items-center gap-1 text-xs text-amber-400 whitespace-nowrap">
                     <AlertCircle className="w-3 h-3" /> Action required
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 <button
                   onClick={() => handleClassify(selected.id)}
                   disabled={classifying}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-50"
                   title="Classify with AI"
                 >
-                  <Sparkles className={`w-3 h-3 ${classifying ? 'animate-pulse' : ''}`} />
-                  Classify
+                  <Sparkles className={`w-3.5 h-3.5 ${classifying ? 'animate-pulse' : ''}`} />
+                  <span className="hidden sm:inline">Classify</span>
                 </button>
                 <button
                   onClick={() => { setShowDraftForm(!showDraftForm); setDraftResult(null) }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
                     showDraftForm || draftResult ? 'bg-primary/15 text-primary' : 'bg-secondary text-muted-foreground hover:text-foreground'
                   }`}
                   title="Draft a reply with AI"
                 >
-                  <PenLine className="w-3 h-3" />
-                  Draft Reply
+                  <PenLine className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Draft Reply</span>
                 </button>
                 <button
                   onClick={() => handleAction(selected.is_flagged ? 'unflag' : 'flag', [selected.id])}
@@ -438,11 +492,11 @@ export default function InboxPage() {
                     href={selected.unsubscribe_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-orange-500/15 text-orange-400 hover:bg-orange-500/25 transition-colors"
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md bg-orange-500/15 text-orange-400 hover:bg-orange-500/25 transition-colors"
                     title="Unsubscribe"
                   >
-                    <MailX className="w-3 h-3" />
-                    Unsubscribe
+                    <MailX className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Unsubscribe</span>
                   </a>
                 )}
                 <button
@@ -454,9 +508,9 @@ export default function InboxPage() {
               </div>
             </div>
 
-            <h2 className="text-lg font-semibold mb-2 text-foreground">{selected.subject || '(no subject)'}</h2>
+            <h2 className="text-base md:text-lg font-semibold mb-2 text-foreground break-words">{selected.subject || '(no subject)'}</h2>
 
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 md:gap-3 text-xs text-muted-foreground">
               <span>From: <span className="text-foreground">{extractSender(selected.from_address).name}</span></span>
               {selected.to_addresses && <span>To: {truncate(selected.to_addresses, 40)}</span>}
               <span>{formatDate(selected.date)}</span>
@@ -470,6 +524,39 @@ export default function InboxPage() {
                   <span className="text-xs font-medium text-primary">AI Summary</span>
                 </div>
                 <p className="text-muted-foreground text-xs">{selected.classifications[0].summary}</p>
+              </div>
+            )}
+
+            {/* Tracking Codes */}
+            {selected.tracking_codes && selected.tracking_codes.length > 0 && (
+              <div className="mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <Package className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-xs font-medium text-amber-400">Sendungsverfolgung</span>
+                </div>
+                <div className="space-y-1.5">
+                  {selected.tracking_codes.map((tc, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{tc.carrier}:</span>
+                      <a
+                        href={tc.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary hover:underline font-mono truncate"
+                      >
+                        {tc.code}
+                      </a>
+                      <a
+                        href={tc.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
+                      >
+                        Verfolgen
+                      </a>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -593,7 +680,7 @@ export default function InboxPage() {
           </div>
 
           {/* Detail Body */}
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 px-3 md:px-6 py-4">
             {selected.body_html ? (
               <div
                 ref={el => {
@@ -602,7 +689,7 @@ export default function InboxPage() {
                     a.setAttribute('rel', 'noopener noreferrer')
                   })
                 }}
-                className="mail-body prose prose-invert prose-sm max-w-none"
+                className="mail-body prose prose-invert prose-sm max-w-none overflow-x-hidden break-words min-w-0 [&_img]:max-w-full [&_img]:h-auto [&_table]:w-full [&_table]:max-w-full [&_table]:table-fixed [&_td]:max-w-full [&_div]:max-w-full"
                 dangerouslySetInnerHTML={{ __html: stripStyleTags(selected.body_html) }}
               />
             ) : (
@@ -612,7 +699,7 @@ export default function InboxPage() {
 
           {/* Detail Footer - Attachments & Links */}
           {((selected.attachments && selected.attachments.length > 0) || (selected.links && selected.links.length > 0)) && (
-            <div className="px-6 py-3 border-t border-border">
+            <div className="px-3 md:px-6 py-3 border-t border-border">
               {selected.attachments && selected.attachments.length > 0 && (
                 <div className="flex items-center gap-2 flex-wrap mb-2">
                   <Paperclip className="w-3.5 h-3.5 text-muted-foreground" />

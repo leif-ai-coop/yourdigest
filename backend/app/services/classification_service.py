@@ -48,18 +48,32 @@ async def classify_message(db: AsyncSession, message_id: uuid.UUID) -> MailClass
     if not message:
         raise NotFoundError("Message not found")
 
+    # Check for existing classification
+    existing_result = await db.execute(
+        select(MailClassification).where(MailClassification.message_id == message.id).limit(1)
+    )
+    existing = existing_result.scalar_one_or_none()
+
     # Try rule-based first
     result = await db.execute(
         select(ClassificationRule).order_by(ClassificationRule.priority.desc())
     )
     rules = result.scalars().all()
 
-    classification = apply_rules(message, rules)
-    if classification:
-        db.add(classification)
+    rule_match = apply_rules(message, rules)
+    if rule_match:
+        if existing:
+            existing.category = rule_match.category
+            existing.confidence = rule_match.confidence
+            existing.priority = rule_match.priority
+            existing.classified_by = "rule"
+            await db.flush()
+            await db.refresh(existing)
+            return existing
+        db.add(rule_match)
         await db.flush()
-        await db.refresh(classification)
-        return classification
+        await db.refresh(rule_match)
+        return rule_match
 
     # Fall back to LLM classification
     from app.llm.tasks.classify import classify_with_llm

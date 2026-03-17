@@ -93,6 +93,7 @@ class MailMessageOut(BaseModel):
     size_bytes: int | None
     created_at: datetime
     unsubscribe_url: str | None = None
+    tracking_codes: list[dict] | None = None
 
     model_config = {"from_attributes": True}
 

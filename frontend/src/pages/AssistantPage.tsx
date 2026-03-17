@@ -206,9 +206,9 @@ export default function AssistantPage() {
   if (loading) return <PageSpinner />
 
   return (
-    <div className="flex h-[calc(100vh-48px)] -m-6">
+    <div className="flex h-full md:h-[calc(100vh-48px)] -m-3 md:-m-6 min-w-0 w-[calc(100%+1.5rem)] md:w-[calc(100%+3rem)]">
       {/* Conversation List */}
-      <div className="w-72 border-r border-border flex flex-col bg-background">
+      <div className="hidden md:flex w-72 border-r border-border flex-col bg-background">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <span className="text-sm font-medium text-foreground">Conversations</span>
           <button
@@ -278,7 +278,7 @@ export default function AssistantPage() {
                       <Sparkles className="w-3.5 h-3.5 text-primary" />
                     </div>
                   )}
-                  <div className={`max-w-[80%] rounded-lg px-4 py-2.5 text-sm leading-relaxed ${
+                  <div className={`max-w-[90%] md:max-w-[80%] rounded-lg px-4 py-2.5 text-sm leading-relaxed ${
                     msg.role === 'user'
                       ? 'bg-primary text-primary-foreground'
                       : 'bg-secondary text-foreground'
@@ -303,7 +303,7 @@ export default function AssistantPage() {
                   <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <Sparkles className="w-3.5 h-3.5 text-primary animate-pulse" />
                   </div>
-                  <div className="max-w-[80%] rounded-lg px-4 py-2.5 text-sm leading-relaxed bg-secondary text-foreground">
+                  <div className="max-w-[90%] md:max-w-[80%] rounded-lg px-4 py-2.5 text-sm leading-relaxed bg-secondary text-foreground">
                     {streamContent ? (
                       <div>
                         <div className="prose prose-invert prose-sm max-w-none [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_pre]:bg-background/50 [&_pre]:rounded [&_pre]:p-2 [&_code]:text-primary [&_a]:text-primary"><Markdown>{streamContent}</Markdown></div>

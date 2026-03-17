@@ -4,7 +4,7 @@ import { PageSpinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
 import {
   Heart, Battery, Moon, Footprints, Brain, Activity,
-  Wind, Weight, Layers, Flame, Gauge, Settings, RefreshCw, GripVertical
+  Wind, Weight, Layers, Flame, Gauge, Settings, RefreshCw, GripVertical, ChevronUp, ChevronDown
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import {
@@ -109,14 +109,16 @@ function ChartTooltip({ active, payload, label }: any) {
   )
 }
 
-// Card wrapper with drag support
+// Card wrapper with drag support (desktop) and up/down buttons (mobile)
 function DashboardCard({
   title, icon: Icon, children, cardId, dragging, onDragStart, onDragOver, onDrop, onDragEnd,
+  onMoveUp, onMoveDown, isFirst, isLast,
 }: {
   title: string; icon: LucideIcon; children: React.ReactNode
   cardId: string; dragging: string | null
   onDragStart: (id: string) => void; onDragOver: (e: React.DragEvent, id: string) => void
   onDrop: (id: string) => void; onDragEnd: () => void
+  onMoveUp: () => void; onMoveDown: () => void; isFirst: boolean; isLast: boolean
 }) {
   return (
     <div
@@ -129,13 +131,17 @@ function DashboardCard({
           draggable
           onDragStart={() => onDragStart(cardId)}
           onDragEnd={onDragEnd}
-          className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground transition-colors"
+          className="hidden md:block cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground transition-colors"
           title="Drag to reorder"
         >
           <GripVertical className="w-4 h-4" />
         </div>
         <Icon className="w-4 h-4 text-primary" />
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <h3 className="text-sm font-medium text-foreground flex-1">{title}</h3>
+        <div className="flex md:hidden gap-0.5">
+          <button onClick={onMoveUp} disabled={isFirst} className="p-0.5 text-muted-foreground disabled:opacity-20"><ChevronUp className="w-4 h-4" /></button>
+          <button onClick={onMoveDown} disabled={isLast} className="p-0.5 text-muted-foreground disabled:opacity-20"><ChevronDown className="w-4 h-4" /></button>
+        </div>
       </div>
       {children}
     </div>
@@ -198,6 +204,18 @@ export default function HealthPage() {
     setDraggingCard(null)
   }, [draggingCard])
   const handleDragEnd = useCallback(() => setDraggingCard(null), [])
+  const moveCard = useCallback((cardId: string, dir: -1 | 1) => {
+    setCardOrder(prev => {
+      const next = [...prev]
+      const idx = next.indexOf(cardId)
+      if (idx === -1) return prev
+      const target = idx + dir
+      if (target < 0 || target >= next.length) return prev
+      ;[next[idx], next[target]] = [next[target], next[idx]]
+      saveCardOrder(next)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     api.get<any>('/garmin/account')
@@ -443,13 +461,15 @@ export default function HealthPage() {
     const oHigh = Math.round(optCenter * 1.3)
     const hThreshold = Math.round(optCenter * 1.7)
 
-    // Calculate EWMA-based acute load per day
-    const alpha7 = 2 / (7 + 1)
-    let ewma7 = 0
-    const chartData = dates.map(d => {
+    // Calculate 7-day rolling sum (matches Garmin's Acute Training Load)
+    const chartData = dates.map((d, i) => {
       const v = dailyLoads[d] || 0
-      ewma7 = alpha7 * v + (1 - alpha7) * ewma7
-      const acute = Math.round(ewma7 * 7.5)
+      // Sum of last 7 days (including today)
+      let acute = 0
+      for (let j = Math.max(0, i - 6); j <= i; j++) {
+        acute += dailyLoads[dates[j]] || 0
+      }
+      acute = Math.round(acute)
       return {
         date: formatDateShort(d),
         load: Math.round(v),
@@ -534,13 +554,13 @@ export default function HealthPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
           <Heart className="w-5 h-5 text-primary" />
           <h1 className="text-xl font-semibold">Health</h1>
           {lastSyncAt && (
-            <span className="text-xs text-muted-foreground ml-2">
-              Last sync: {new Date(lastSyncAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            <span className="text-xs text-muted-foreground ml-1">
+              {new Date(lastSyncAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
             </span>
           )}
         </div>
@@ -593,8 +613,8 @@ export default function HealthPage() {
 
       {/* Dashboard Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {cardOrder.map(cardId => {
-          const cp = { cardId, dragging: draggingCard, onDragStart: handleDragStart, onDragOver: handleDragOver, onDrop: handleDrop, onDragEnd: handleDragEnd }
+        {cardOrder.map((cardId, cardIdx) => {
+          const cp = { cardId, dragging: draggingCard, onDragStart: handleDragStart, onDragOver: handleDragOver, onDrop: handleDrop, onDragEnd: handleDragEnd, onMoveUp: () => moveCard(cardId, -1), onMoveDown: () => moveCard(cardId, 1), isFirst: cardIdx === 0, isLast: cardIdx === cardOrder.length - 1 }
           switch (cardId) {
 
           case 'body-battery': return (
@@ -767,7 +787,7 @@ export default function HealthPage() {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
-                        <XAxis dataKey="date" tick={{ fill: CHART_COLORS.axis, fontSize: 11 }} />
+                        <XAxis dataKey="date" tick={{ fill: CHART_COLORS.axis, fontSize: 10 }} interval={0} />
                         <YAxis domain={hrvYDomain} tick={{ fill: CHART_COLORS.axis, fontSize: 11 }} />
                         <Tooltip content={<ChartTooltip />} />
                         <Area type="monotone" dataKey="balancedUpper" name="Baseline High" stroke="none" fill="url(#hrvBaseline)" />

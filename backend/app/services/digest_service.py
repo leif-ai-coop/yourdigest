@@ -1159,21 +1159,15 @@ def _render_health_chart_html(chart_id: str, health_data: dict[str, list[dict]])
             acts = d if isinstance(d, list) else d.get("ActivitiesForDay", {}).get("payload", [])
             daily_loads[s["date"]] = sum(a.get("activityTrainingLoad", 0) for a in (acts if isinstance(acts, list) else []))
 
-        # Fill gaps and compute EWMA
+        # Calculate 7-day rolling sum (matches Garmin's Acute Training Load)
         if daily_loads:
-            all_dates = sorted(daily_loads.keys())
             from datetime import date as date_cls
-            start_d = date_cls.fromisoformat(all_dates[0])
-            end_d = date_cls.fromisoformat(all_dates[-1])
-            alpha7 = 2 / (7 + 1)
-            ewma7 = 0.0
-            d = start_d
-            while d <= end_d:
-                iso = d.isoformat()
-                v = daily_loads.get(iso, 0)
-                ewma7 = alpha7 * v + (1 - alpha7) * ewma7
-                d += timedelta(days=1)
-            acute = round(ewma7 * 7.5)
+            end_d = date_cls.fromisoformat(sorted(daily_loads.keys())[-1])
+            acute = 0
+            for i in range(7):
+                d = end_d - timedelta(days=i)
+                acute += daily_loads.get(d.isoformat(), 0)
+            acute = round(acute)
         else:
             acute = 0
 

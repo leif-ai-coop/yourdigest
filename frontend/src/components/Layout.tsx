@@ -55,10 +55,11 @@ export default function Layout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
+
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar */}
-      <aside className={`${sidebarOpen ? 'w-56' : 'w-0'} bg-card border-r border-border flex flex-col fixed h-screen overflow-hidden transition-all duration-200`}>
+    <div className="h-[100dvh] md:min-h-screen md:h-auto block md:flex overflow-hidden w-full">
+      {/* Desktop Sidebar */}
+      <aside className={`hidden md:flex ${sidebarOpen ? 'w-56' : 'w-0'} bg-card border-r border-border flex-col fixed h-screen overflow-hidden transition-all duration-200`}>
         {/* Logo */}
         <div className="px-5 py-5 flex items-center gap-2.5 min-w-[14rem]">
           <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -103,21 +104,39 @@ export default function Layout() {
         </div>
       </aside>
 
-      {/* Sidebar Toggle */}
+      {/* Desktop Sidebar Toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className={`fixed top-4 ${sidebarOpen ? 'left-[13rem]' : 'left-3'} z-10 p-1.5 rounded-md bg-card border border-border text-muted-foreground hover:text-foreground transition-all duration-200`}
+        className={`hidden md:block fixed top-4 ${sidebarOpen ? 'left-[13rem]' : 'left-3'} z-10 p-1.5 rounded-md bg-card border border-border text-muted-foreground hover:text-foreground transition-all duration-200`}
         title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
       >
         {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
       </button>
 
       {/* Main Content */}
-      <main className={`${sidebarOpen ? 'ml-56' : 'ml-0'} flex-1 min-h-screen transition-all duration-200`}>
-        <div className="p-6">
+      <main className={`${sidebarOpen ? 'md:ml-56' : 'md:ml-0'} flex-1 flex flex-col transition-all duration-200 h-full md:h-auto md:min-h-screen w-full max-w-full overflow-hidden`}>
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-14 md:pb-6">
           <Outlet />
         </div>
       </main>
+
+      {/* Mobile Bottom Nav */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 bg-card border-t border-border flex items-center justify-around h-12" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        {navItems.map(({ to, icon: Icon }) => {
+          const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              className={`flex items-center justify-center p-2 transition-colors ${
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              }`}
+            >
+              <Icon className="w-6 h-6" />
+            </NavLink>
+          )
+        })}
+      </nav>
     </div>
   )
 }

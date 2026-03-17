@@ -282,7 +282,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-card rounded-lg p-1 w-fit">
+      <div className="flex gap-1 mb-6 bg-card rounded-lg p-1 w-fit overflow-x-auto max-w-full">
         {tabs.map(t => (
           <button
             key={t.key}

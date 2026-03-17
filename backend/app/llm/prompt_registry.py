@@ -31,7 +31,8 @@ Respond in JSON format with these fields:
 - summary: brief 1-2 sentence summary
 - action_required: boolean
 - due_date: ISO date string if applicable, null otherwise
-- tags: list of relevant tags"""
+- tags: list of relevant tags
+- tracking_codes: array of package tracking codes found in the email. Each entry: {{"carrier": "DHL/UPS/DPD/Hermes/GLS/FedEx/Amazon/other", "code": "the tracking number"}}. Look for tracking numbers in URLs (e.g. ?piececode=..., ?tracknum=...), in the email text, and in shipping notifications. Return empty array [] if no tracking codes found."""
 
 
 DEFAULT_PROMPTS = {

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, Text, Integer, DateTime, ForeignKey, Index, func
+from sqlalchemy import String, Boolean, Text, Integer, DateTime, ForeignKey, Index, JSON, func
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,6 +52,7 @@ class MailMessage(Base, UUIDMixin, TimestampMixin):
     folder: Mapped[str] = mapped_column(String(200), default="INBOX")
     raw_headers: Mapped[str | None] = mapped_column(Text, nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tracking_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     attachments: Mapped[list["MailAttachment"]] = relationship(back_populates="message", cascade="all, delete-orphan")
     links: Mapped[list["MailLink"]] = relationship(back_populates="message", cascade="all, delete-orphan")

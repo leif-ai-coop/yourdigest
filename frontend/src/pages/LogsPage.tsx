@@ -113,8 +113,8 @@ export default function LogsPage() {
         auditLogs.length === 0 ? (
           <EmptyState icon={ScrollText} title="No audit logs yet" description="Actions will be logged here." />
         ) : (
-          <div className="bg-card rounded-lg border border-border overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-card rounded-lg border border-border overflow-x-auto">
+            <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="px-4 py-2.5 text-left font-medium">Time</th>

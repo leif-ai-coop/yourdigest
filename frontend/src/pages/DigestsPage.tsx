@@ -49,6 +49,112 @@ interface DigestRun {
   created_at: string
 }
 
+type Repeat = 'daily' | 'weekdays' | 'weekly' | 'biweekly' | 'monthly'
+
+const DAYS = [
+  { key: '1', label: 'Mo' }, { key: '2', label: 'Di' }, { key: '3', label: 'Mi' },
+  { key: '4', label: 'Do' }, { key: '5', label: 'Fr' }, { key: '6', label: 'Sa' }, { key: '0', label: 'So' },
+]
+
+function parseCron(cron: string): { hour: string; minute: string; repeat: Repeat; days: string[]; monthDay: string } {
+  const parts = cron.split(/\s+/)
+  const minute = parts[0] || '0'
+  const hour = parts[1] || '7'
+  const dom = parts[2] || '*'
+  const dow = parts[4] || '*'
+
+  let repeat: Repeat = 'daily'
+  let days: string[] = []
+  let monthDay = '1'
+
+  if (dom !== '*') {
+    repeat = dom.includes('/15') ? 'biweekly' : 'monthly'
+    monthDay = dom.replace(/\/.*/, '')
+  } else if (dow === '1-5') {
+    repeat = 'weekdays'
+  } else if (dow !== '*') {
+    const dowParts = dow.split(',')
+    days = dowParts
+    repeat = 'weekly'
+  }
+
+  return { hour, minute, repeat, days, monthDay }
+}
+
+function buildCron(hour: string, minute: string, repeat: Repeat, days: string[], monthDay: string): string {
+  const h = parseInt(hour) || 0
+  const m = parseInt(minute) || 0
+  switch (repeat) {
+    case 'daily': return `${m} ${h} * * *`
+    case 'weekdays': return `${m} ${h} * * 1-5`
+    case 'weekly': return `${m} ${h} * * ${days.length > 0 ? days.join(',') : '1'}`
+    case 'biweekly': return `${m} ${h} 1,15 * *`
+    case 'monthly': return `${m} ${h} ${monthDay || '1'} * *`
+  }
+}
+
+function ScheduleBuilder({ cron, onChange }: { cron: string; onChange: (cron: string) => void }) {
+  const parsed = parseCron(cron)
+  const [repeat, setRepeat] = useState<Repeat>(parsed.repeat)
+  const [hour, setHour] = useState(parsed.hour)
+  const [minute, setMinute] = useState(parsed.minute)
+  const [days, setDays] = useState<string[]>(parsed.days)
+  const [monthDay, setMonthDay] = useState(parsed.monthDay)
+
+  const update = (r: Repeat, h: string, m: string, d: string[], md: string) => {
+    onChange(buildCron(h, m, r, d, md))
+  }
+
+  const inputCls = "bg-secondary border border-border rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+
+  return (
+    <div className="space-y-2">
+      <label className="text-xs text-muted-foreground block mb-1">Schedule</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={repeat} onChange={e => { const r = e.target.value as Repeat; setRepeat(r); update(r, hour, minute, days, monthDay) }} className={inputCls}>
+          <option value="daily">Täglich</option>
+          <option value="weekdays">Werktags</option>
+          <option value="weekly">Wöchentlich</option>
+          <option value="biweekly">Zweiwöchentlich</option>
+          <option value="monthly">Monatlich</option>
+        </select>
+        <span className="text-xs text-muted-foreground">um</span>
+        <input type="number" min={0} max={23} value={hour} onChange={e => { setHour(e.target.value); update(repeat, e.target.value, minute, days, monthDay) }} className={`${inputCls} w-14 text-center`} />
+        <span className="text-xs text-muted-foreground">:</span>
+        <input type="number" min={0} max={59} step={5} value={minute} onChange={e => { setMinute(e.target.value); update(repeat, hour, e.target.value, days, monthDay) }} className={`${inputCls} w-14 text-center`} />
+        <span className="text-xs text-muted-foreground">Uhr</span>
+      </div>
+
+      {repeat === 'weekly' && (
+        <div className="flex gap-1">
+          {DAYS.map(d => (
+            <button key={d.key} onClick={() => {
+              const next = days.includes(d.key) ? days.filter(k => k !== d.key) : [...days, d.key]
+              setDays(next)
+              update(repeat, hour, minute, next, monthDay)
+            }}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                days.includes(d.key) ? 'bg-primary/20 text-primary font-medium' : 'bg-secondary text-muted-foreground hover:text-foreground'
+              }`}>
+              {d.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {repeat === 'monthly' && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Am</span>
+          <input type="number" min={1} max={28} value={monthDay} onChange={e => { setMonthDay(e.target.value); update(repeat, hour, minute, days, e.target.value) }} className={`${inputCls} w-14 text-center`} />
+          <span className="text-xs text-muted-foreground">. des Monats</span>
+        </div>
+      )}
+
+      <div className="text-[10px] text-muted-foreground font-mono">{cron}</div>
+    </div>
+  )
+}
+
 export default function DigestsPage() {
   const [policies, setPolicies] = useState<DigestPolicy[]>([])
   const [runs, setRuns] = useState<DigestRun[]>([])
@@ -239,7 +345,7 @@ export default function DigestsPage() {
       {/* Add Policy Form */}
       {showAdd && (
         <form onSubmit={handleAdd} className="bg-card rounded-lg border border-border p-4 mb-6">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input placeholder="Policy Name" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
               className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
             <select value={form.schedule_cron} onChange={e => setForm({...form, schedule_cron: e.target.value})}
@@ -304,14 +410,14 @@ export default function DigestsPage() {
             const lastRun = policyRuns[0]
             return (
               <div key={policy.id} className="bg-card rounded-lg border border-border p-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2">
                       <FileText className="w-4 h-4 text-primary" />
                       <span className="font-medium text-sm">{policy.name}</span>
                       <span className={`w-2 h-2 rounded-full ${policy.enabled ? 'bg-emerald-400' : 'bg-gray-500'}`} />
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1.5">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-muted-foreground mt-1.5">
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {cronLabels[policy.schedule_cron] || policy.schedule_cron}
@@ -340,7 +446,7 @@ export default function DigestsPage() {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     <button
                       onClick={() => {
                         if (editingSettings === policy.id) {
@@ -422,32 +528,18 @@ export default function DigestsPage() {
                 {editingSettings === policy.id && (
                   <div className="mt-3 pt-3 border-t border-border space-y-3">
                     {/* Schedule & Email */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-xs text-muted-foreground block mb-1">Schedule</label>
-                        <select value={editCron} onChange={e => setEditCron(e.target.value)}
-                          className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary">
-                          <option value="0 7 * * *">Daily at 7:00</option>
-                          <option value="0 7 * * 1-5">Weekdays at 7:00</option>
-                          <option value="0 8 * * 1">Mondays at 8:00</option>
-                          <option value="0 18 * * *">Daily at 18:00</option>
-                          {!['0 7 * * *', '0 7 * * 1-5', '0 8 * * 1', '0 18 * * *'].includes(editCron) && (
-                            <option value={editCron}>{editCron}</option>
-                          )}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground block mb-1">Target Email</label>
-                        <input value={editTargetEmail} onChange={e => setEditTargetEmail(e.target.value)}
-                          placeholder="(default account email)"
-                          className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
-                      </div>
+                    <ScheduleBuilder cron={editCron} onChange={setEditCron} />
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">Target Email</label>
+                      <input value={editTargetEmail} onChange={e => setEditTargetEmail(e.target.value)}
+                        placeholder="(default account email)"
+                        className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
                     </div>
 
                     {/* Content Modules */}
                     <div>
                       <label className="text-xs text-muted-foreground block mb-1.5">Inhalte</label>
-                      <div className="flex flex-wrap items-center gap-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         <label className="flex items-center gap-2 text-sm text-muted-foreground">
                           <input type="checkbox" checked={editSectionOrder.includes('mail')}
                             onChange={e => toggleSection('mail', e.target.checked)} className="rounded" />
@@ -482,7 +574,7 @@ export default function DigestsPage() {
                     </div>
 
                     {/* Options row */}
-                    <div className="flex items-center gap-5">
+                    <div className="flex flex-wrap items-center gap-3">
                       <label className="flex items-center gap-2 text-sm text-muted-foreground">
                         <input type="checkbox" checked={editSinceAny} onChange={e => setEditSinceAny(e.target.checked)} className="rounded" />
                         <Clock className="w-3.5 h-3.5" /> Since last any digest
@@ -655,8 +747,8 @@ export default function DigestsPage() {
       {runs.length > 0 && (
         <div>
           <h2 className="text-sm font-medium mb-3">Recent Runs</h2>
-          <div className="bg-card rounded-lg border border-border overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-card rounded-lg border border-border overflow-x-auto">
+            <table className="w-full text-sm min-w-[500px]">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="text-left px-4 py-2 font-medium">Policy</th>

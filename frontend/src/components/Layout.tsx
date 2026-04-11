@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { Inbox, FileText, Settings, ScrollText, PanelLeftClose, PanelLeft, MessageSquare, Heart, LogOut } from 'lucide-react'
+import { Inbox, FileText, Settings, ScrollText, PanelLeftClose, PanelLeft, MessageSquare, Heart, Headphones, LogOut } from 'lucide-react'
 
 function AppIcon({ className }: { className?: string }) {
   return (
@@ -46,6 +46,7 @@ const navItems = [
   { to: '/', label: 'Inbox', icon: Inbox },
   { to: '/assistant', label: 'Assistant', icon: MessageSquare },
   { to: '/health', label: 'Health', icon: Heart },
+  { to: '/podcasts', label: 'Podcasts', icon: Headphones },
   { to: '/digests', label: 'Digests', icon: FileText },
   { to: '/settings', label: 'Settings', icon: Settings },
   { to: '/logs', label: 'Logs', icon: ScrollText },
@@ -59,9 +60,9 @@ export default function Layout() {
   return (
     <div className="h-[100dvh] md:min-h-screen md:h-auto block md:flex overflow-hidden w-full">
       {/* Desktop Sidebar */}
-      <aside className={`hidden md:flex ${sidebarOpen ? 'w-56' : 'w-0'} bg-card border-r border-border flex-col fixed h-screen overflow-hidden transition-all duration-200`}>
+      <aside className={`hidden md:flex ${sidebarOpen ? 'w-44' : 'w-0'} bg-card border-r border-border flex-col fixed h-screen overflow-hidden transition-all duration-200`}>
         {/* Logo */}
-        <div className="px-5 py-5 flex items-center gap-2.5 min-w-[14rem]">
+        <div className="px-4 py-5 flex items-center gap-2.5 min-w-[11rem]">
           <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center overflow-hidden flex-shrink-0">
             <AppIcon className="w-7 h-7 text-background" />
           </div>
@@ -69,7 +70,7 @@ export default function Layout() {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-2 space-y-0.5 min-w-[14rem]">
+        <nav className="flex-1 px-2 py-2 space-y-0.5 min-w-[11rem]">
           {navItems.map(({ to, label, icon: Icon }) => {
             const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
             return (
@@ -90,7 +91,7 @@ export default function Layout() {
         </nav>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-border min-w-[14rem] flex items-center justify-between">
+        <div className="px-4 py-4 border-t border-border min-w-[11rem] flex items-center justify-between">
           <div className="text-xs text-muted-foreground whitespace-nowrap">
             You Digest
           </div>
@@ -107,14 +108,14 @@ export default function Layout() {
       {/* Desktop Sidebar Toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className={`hidden md:block fixed top-4 ${sidebarOpen ? 'left-[13rem]' : 'left-3'} z-10 p-1.5 rounded-md bg-card border border-border text-muted-foreground hover:text-foreground transition-all duration-200`}
+        className={`hidden md:block fixed top-4 ${sidebarOpen ? 'left-[10.25rem]' : 'left-3'} z-10 p-1.5 rounded-md bg-card border border-border text-muted-foreground hover:text-foreground transition-all duration-200`}
         title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
       >
         {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
       </button>
 
       {/* Main Content */}
-      <main className={`${sidebarOpen ? 'md:ml-56' : 'md:ml-0'} flex-1 flex flex-col transition-all duration-200 h-full md:h-auto md:min-h-screen w-full max-w-full overflow-hidden`}>
+      <main className={`${sidebarOpen ? 'md:ml-44' : 'md:ml-0'} flex-1 flex flex-col transition-all duration-200 h-full md:h-auto md:min-h-screen w-full max-w-full overflow-hidden`}>
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-14 md:pb-6">
           <Outlet />
         </div>

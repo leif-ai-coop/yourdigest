@@ -10,6 +10,11 @@ from app.models.llm import LlmProviderConfig, LlmTask, LlmPromptVersion
 from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.audit import AuditLog, AppSetting
 from app.models.garmin import GarminAccount, GarminSnapshot
+from app.models.podcast import (
+    PodcastFeed, PodcastEpisode, PodcastEpisodeChunk, PodcastArtifact,
+    PodcastPrompt, PodcastProcessingRun, PodcastMailPolicy,
+    PodcastDeliveryRun, PodcastDeliveryRunEpisode,
+)
 
 __all__ = [
     "Base",
@@ -24,4 +29,7 @@ __all__ = [
     "AssistantConversation", "AssistantMessage",
     "AuditLog", "AppSetting",
     "GarminAccount", "GarminSnapshot",
+    "PodcastFeed", "PodcastEpisode", "PodcastEpisodeChunk", "PodcastArtifact",
+    "PodcastPrompt", "PodcastProcessingRun", "PodcastMailPolicy",
+    "PodcastDeliveryRun", "PodcastDeliveryRunEpisode",
 ]

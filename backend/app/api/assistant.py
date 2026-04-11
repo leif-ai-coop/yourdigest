@@ -12,6 +12,10 @@ from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.audit import AppSetting
 from app.models.digest import DigestPolicy
 from app.models.mail import MailMessage, MailAccount
+from app.models.podcast import (
+    PodcastFeed, PodcastEpisode, PodcastEpisodeChunk, PodcastArtifact,
+    PodcastPrompt, PodcastProcessingRun,
+)
 from app.models.forwarding import ForwardingPolicy
 from app.schemas.assistant import MessageSend, ConversationOut, ConversationDetail
 from app.schemas.common import MessageResponse
@@ -23,15 +27,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SYSTEM_PROMPT = """Du bist der You Digest Assistant — ein hilfsbereiter, deutschsprachiger Assistent.
-Du hilfst dem Benutzer bei der Verwaltung seiner E-Mails, Digests, RSS-Feeds, Gesundheitsdaten und Weiterleitungen.
+Du hilfst dem Benutzer bei der Verwaltung seiner E-Mails, Digests, RSS-Feeds, Gesundheitsdaten, Podcasts und Weiterleitungen.
 Antworte praezise und freundlich. Halte deine Antworten kurz und relevant.
 
 Wenn der Benutzer nach E-Mail-Inhalten fragt, gehe zweistufig vor:
 1. Nutze browse_recent_mails um einen Ueberblick (Absender + Betreff) zu bekommen
 2. Nutze read_mail nur fuer die relevanten Mails, deren Inhalt du wirklich brauchst
 
-Wenn du eine Aktion ausfuehren sollst (z.B. Digest anlegen), nutze die verfuegbaren Tools.
-Frage nach fehlenden Informationen bevor du ein Tool aufrufst."""
+Wenn der Benutzer nach Podcast-Episoden fragt, gehe zweistufig vor:
+1. Nutze list_podcast_episodes um einen Ueberblick zu bekommen
+2. Nutze get_podcast_episode nur fuer die Episode, deren Summary/Transkript du wirklich brauchst
+
+Wenn du eine Aktion ausfuehren sollst (z.B. Digest anlegen, Podcast-Feed hinzufuegen), nutze die verfuegbaren Tools.
+Frage nach fehlenden Informationen bevor du ein Tool aufrufst.
+
+Folgende Dinge kannst du NICHT ueber Tools erledigen — weise den Benutzer darauf hin, dass er das manuell im UI machen muss:
+- Podcast-Prompts erstellen oder loeschen (unter Podcasts → Prompts)
+- Podcast-Mail-Policies erstellen oder verwalten (unter Podcasts → Mail-Policies)
+- Chunking-Konfiguration aendern
+- Podcast-Prompts bearbeiten geht nur ueber update_podcast_prompt (Inhalt aendern), aber nicht anlegen/loeschen"""
 
 TOOLS = [
     {
@@ -122,6 +136,162 @@ TOOLS = [
                     "since_hours": {"type": "integer", "description": "Zeitraum in Stunden (optional, default = seit letztem Lauf)"},
                 },
                 "required": ["policy_name"],
+            },
+        },
+    },
+    # --- Podcast Tools ---
+    {
+        "type": "function",
+        "function": {
+            "name": "list_podcast_feeds",
+            "description": "Liste alle Podcast-Feeds auf mit Status, Modellen und Episoden-Zahlen.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_podcast_feed",
+            "description": "Fuege einen neuen Podcast-Feed hinzu. Beim Hinzufuegen wird nur die neueste Episode automatisch verarbeitet, aeltere werden uebersprungen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "RSS-Feed-URL des Podcasts"},
+                    "title": {"type": "string", "description": "Optionaler benutzerdefinierter Titel"},
+                    "auto_process_new": {"type": "boolean", "description": "Neue Episoden automatisch verarbeiten (default: true)", "default": True},
+                    "min_episode_duration_seconds": {"type": "integer", "description": "Minimale Episodendauer in Sekunden (filtert Trailer, z.B. 180)"},
+                    "max_episode_duration_seconds": {"type": "integer", "description": "Maximale Episodendauer in Sekunden"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_podcast_feed",
+            "description": "Aendere Einstellungen eines Podcast-Feeds: Modelle, Intervall, Limits, enabled, Prompts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "feed_name": {"type": "string", "description": "Name oder Teil des Feed-Titels"},
+                    "enabled": {"type": "boolean", "description": "Feed aktivieren/deaktivieren"},
+                    "auto_process_new": {"type": "boolean", "description": "Neue Episoden automatisch verarbeiten"},
+                    "transcription_model": {"type": "string", "description": "Modell fuer Transkription (leer = global default)"},
+                    "summary_model": {"type": "string", "description": "Modell fuer Zusammenfassung (leer = global default)"},
+                    "fetch_interval_minutes": {"type": "integer", "description": "Fetch-Intervall in Minuten"},
+                    "min_episode_duration_seconds": {"type": "integer", "description": "Minimale Episodendauer in Sekunden"},
+                    "max_episode_duration_seconds": {"type": "integer", "description": "Maximale Episodendauer in Sekunden"},
+                    "language": {"type": "string", "description": "Sprache des Podcasts (z.B. 'de', 'en')"},
+                },
+                "required": ["feed_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_podcast_feed",
+            "description": "Loesche einen Podcast-Feed und alle zugehoerigen Episoden.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "feed_name": {"type": "string", "description": "Name oder Teil des Feed-Titels"},
+                },
+                "required": ["feed_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_podcast_episodes",
+            "description": "Liste Episoden eines Podcast-Feeds auf. Zeigt Titel, Datum, Dauer, Status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "feed_name": {"type": "string", "description": "Name oder Teil des Feed-Titels (leer = alle Feeds)"},
+                    "status": {"type": "string", "description": "Filter nach processing_status: done, error, pending, skipped"},
+                    "search": {"type": "string", "description": "Suchbegriff (durchsucht Titel, Beschreibung, Summary, Transkript)"},
+                    "limit": {"type": "integer", "description": "Maximale Anzahl (default: 20)", "default": 20},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_podcast_episode",
+            "description": "Zeige Details einer Podcast-Episode: Summary, Transkript-Auszug, Status, Chunks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "episode_id": {"type": "string", "description": "UUID der Episode (aus list_podcast_episodes)"},
+                },
+                "required": ["episode_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "process_podcast_episode",
+            "description": "Starte die Verarbeitung einer Podcast-Episode (Download, Transkription, Zusammenfassung). Laeuft im Hintergrund.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "episode_id": {"type": "string", "description": "UUID der Episode"},
+                },
+                "required": ["episode_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_podcast_prompts",
+            "description": "Liste alle Podcast-Zusammenfassungs-Prompts auf.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_podcast_prompt",
+            "description": "Aendere den Inhalt eines bestehenden Podcast-Prompts. Zum Anlegen oder Loeschen von Prompts verwende das UI unter Podcasts → Prompts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt_name": {"type": "string", "description": "Name oder Teil des Prompt-Namens"},
+                    "system_prompt": {"type": "string", "description": "Neuer Prompt-Text"},
+                    "name": {"type": "string", "description": "Neuer Name (optional)"},
+                    "description": {"type": "string", "description": "Neue Beschreibung (optional)"},
+                },
+                "required": ["prompt_name", "system_prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_podcast_queue",
+            "description": "Zeige den aktuellen Verarbeitungsstatus der Podcast-Pipeline: Pending, aktive Verarbeitungen, Fehler.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_podcast_settings",
+            "description": "Setze die globalen Podcast-AI-Modelle (Transkription und Summary). Gilt fuer alle Feeds ohne individuelle Einstellung.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transcription_model": {"type": "string", "description": "Modell fuer Transkription (z.B. 'google/gemini-2.5-flash')"},
+                    "summary_model": {"type": "string", "description": "Modell fuer Zusammenfassung"},
+                },
+                "required": [],
             },
         },
     },
@@ -282,6 +452,296 @@ async def execute_tool(tool_name: str, args: dict) -> str:
                 run = await compose_digest(db, policy, override_since=override_since)
                 await db.commit()
                 return f"Digest '{policy.name}' ausgefuehrt: Status={run.status}, {run.item_count} Items."
+
+            # --- Podcast Tools ---
+
+            elif tool_name == "list_podcast_feeds":
+                result = await db.execute(select(PodcastFeed).order_by(PodcastFeed.created_at))
+                feeds = result.scalars().all()
+                if not feeds:
+                    return "Keine Podcast-Feeds konfiguriert."
+                items = []
+                for f in feeds:
+                    # Count episodes
+                    ep_total = await db.scalar(select(func.count(PodcastEpisode.id)).where(PodcastEpisode.feed_id == f.id))
+                    ep_done = await db.scalar(select(func.count(PodcastEpisode.id)).where(PodcastEpisode.feed_id == f.id, PodcastEpisode.processing_status == "done"))
+                    ep_error = await db.scalar(select(func.count(PodcastEpisode.id)).where(PodcastEpisode.feed_id == f.id, PodcastEpisode.processing_status == "error"))
+                    models_info = ""
+                    if f.transcription_model or f.summary_model:
+                        models_info = f", Transkription: {f.transcription_model or 'global'}, Summary: {f.summary_model or 'global'}"
+                    items.append(
+                        f"- **{f.title or f.url}** | {'aktiv' if f.enabled else 'inaktiv'} | "
+                        f"{ep_done}/{ep_total} fertig"
+                        f"{f', {ep_error} Fehler' if ep_error else ''}"
+                        f"{models_info} | ID: `{f.id}`"
+                    )
+                return "\n".join(items)
+
+            elif tool_name == "add_podcast_feed":
+                from app.services.podcast_feed_service import fetch_podcast_feed
+                feed = PodcastFeed(
+                    url=args["url"],
+                    title=args.get("title"),
+                    auto_process_new=args.get("auto_process_new", True),
+                    min_episode_duration_seconds=args.get("min_episode_duration_seconds"),
+                    max_episode_duration_seconds=args.get("max_episode_duration_seconds"),
+                    enabled=True,
+                )
+                db.add(feed)
+                await db.flush()
+                count = await fetch_podcast_feed(db, feed)
+                await db.commit()
+                await db.refresh(feed)
+                return f"Podcast-Feed '{feed.title or feed.url}' hinzugefuegt. {count} Episoden erkannt (nur die neueste wird automatisch verarbeitet)."
+
+            elif tool_name == "update_podcast_feed":
+                feed_name = args.pop("feed_name")
+                result = await db.execute(
+                    select(PodcastFeed).where(PodcastFeed.title.ilike(f"%{feed_name}%"))
+                )
+                feed = result.scalar_one_or_none()
+                if not feed:
+                    return f"Kein Feed mit dem Namen '{feed_name}' gefunden."
+                changes = []
+                for key in ["enabled", "auto_process_new", "transcription_model", "summary_model",
+                            "fetch_interval_minutes", "min_episode_duration_seconds",
+                            "max_episode_duration_seconds", "language"]:
+                    if key in args and args[key] is not None:
+                        old_val = getattr(feed, key)
+                        setattr(feed, key, args[key])
+                        changes.append(f"{key}: {old_val} → {args[key]}")
+                await db.commit()
+                if not changes:
+                    return f"Keine Aenderungen an '{feed.title}' vorgenommen."
+                return f"Feed '{feed.title}' aktualisiert:\n" + "\n".join(f"- {c}" for c in changes)
+
+            elif tool_name == "delete_podcast_feed":
+                feed_name = args["feed_name"]
+                result = await db.execute(
+                    select(PodcastFeed).where(PodcastFeed.title.ilike(f"%{feed_name}%"))
+                )
+                feed = result.scalar_one_or_none()
+                if not feed:
+                    return f"Kein Feed mit dem Namen '{feed_name}' gefunden."
+                title = feed.title or feed.url
+                await db.delete(feed)
+                await db.commit()
+                return f"Feed '{title}' und alle zugehoerigen Episoden geloescht."
+
+            elif tool_name == "list_podcast_episodes":
+                from sqlalchemy import or_
+                feed_name = args.get("feed_name")
+                status = args.get("status")
+                search = args.get("search")
+                limit = min(args.get("limit", 20), 50)
+
+                query = select(PodcastEpisode).order_by(PodcastEpisode.published_at.desc()).limit(limit)
+
+                if feed_name:
+                    feed_result = await db.execute(
+                        select(PodcastFeed.id).where(PodcastFeed.title.ilike(f"%{feed_name}%"))
+                    )
+                    feed_ids = [r[0] for r in feed_result.all()]
+                    if not feed_ids:
+                        return f"Kein Feed mit dem Namen '{feed_name}' gefunden."
+                    query = query.where(PodcastEpisode.feed_id.in_(feed_ids))
+
+                if status:
+                    query = query.where(PodcastEpisode.processing_status == status)
+
+                if search:
+                    term = f"%{search.lower()}%"
+                    query = query.where(
+                        or_(
+                            PodcastEpisode.title.ilike(term),
+                            PodcastEpisode.description.ilike(term),
+                        )
+                    )
+
+                result = await db.execute(query)
+                episodes = result.scalars().all()
+                if not episodes:
+                    return "Keine Episoden gefunden."
+
+                lines = [f"**{len(episodes)} Episoden:**\n"]
+                for ep in episodes:
+                    date_str = ep.published_at.strftime("%d.%m.") if ep.published_at else "?"
+                    dur = f" ({ep.duration_seconds // 60}min)" if ep.duration_seconds else ""
+                    saved = " ⭐" if ep.is_saved else ""
+                    lines.append(f"- `{ep.id}` | {date_str} | **{ep.title or 'Ohne Titel'}**{dur} | {ep.processing_status}{saved}")
+                return "\n".join(lines)
+
+            elif tool_name == "get_podcast_episode":
+                ep_id = args["episode_id"]
+                try:
+                    episode = await db.get(PodcastEpisode, uuid.UUID(ep_id))
+                except (ValueError, AttributeError):
+                    return f"Ungueltige Episode-ID: {ep_id}"
+                if not episode:
+                    return f"Episode mit ID {ep_id} nicht gefunden."
+
+                # Get feed title
+                feed = await db.get(PodcastFeed, episode.feed_id)
+                feed_title = feed.title if feed else "?"
+
+                # Get active summary
+                summary_result = await db.execute(
+                    select(PodcastArtifact).where(
+                        PodcastArtifact.episode_id == episode.id,
+                        PodcastArtifact.artifact_type == "summary",
+                        PodcastArtifact.is_active == True,
+                    )
+                )
+                summary = summary_result.scalar_one_or_none()
+
+                # Get active transcript (truncated)
+                transcript_result = await db.execute(
+                    select(PodcastArtifact).where(
+                        PodcastArtifact.episode_id == episode.id,
+                        PodcastArtifact.artifact_type == "transcript",
+                        PodcastArtifact.is_active == True,
+                    )
+                )
+                transcript = transcript_result.scalar_one_or_none()
+
+                date_str = episode.published_at.strftime("%d.%m.%Y") if episode.published_at else "unbekannt"
+                dur = f"{episode.duration_seconds // 60} Minuten" if episode.duration_seconds else "unbekannt"
+
+                text = (
+                    f"**{episode.title or 'Ohne Titel'}**\n"
+                    f"**Feed:** {feed_title}\n"
+                    f"**Datum:** {date_str} | **Dauer:** {dur}\n"
+                    f"**Status:** {episode.processing_status} (Discovery: {episode.discovery_status})\n"
+                )
+                if episode.error_message:
+                    text += f"**Fehler:** {episode.error_class}: {episode.error_message}\n"
+
+                if summary:
+                    text += f"\n**Zusammenfassung** ({summary.word_count} Woerter, Modell: {summary.model}):\n{summary.content}\n"
+                else:
+                    text += "\n*Keine Zusammenfassung vorhanden.*\n"
+
+                if transcript:
+                    max_len = await _get_assistant_setting(db, "body_max_chars", 3000)
+                    t_content = transcript.content or ""
+                    if len(t_content) > max_len:
+                        t_content = t_content[:max_len] + f"\n\n... (gekuerzt, {transcript.word_count} Woerter gesamt)"
+                    text += f"\n**Transkript-Auszug:**\n{t_content}\n"
+
+                return text
+
+            elif tool_name == "process_podcast_episode":
+                ep_id = args["episode_id"]
+                try:
+                    episode = await db.get(PodcastEpisode, uuid.UUID(ep_id))
+                except (ValueError, AttributeError):
+                    return f"Ungueltige Episode-ID: {ep_id}"
+                if not episode:
+                    return f"Episode mit ID {ep_id} nicht gefunden."
+                if episode.processing_status == "done":
+                    return f"Episode '{episode.title}' ist bereits verarbeitet."
+                if episode.locked_at is not None:
+                    return f"Episode '{episode.title}' wird gerade verarbeitet."
+
+                # Accept if skipped
+                if episode.discovery_status == "skipped":
+                    episode.discovery_status = "accepted"
+                    episode.skipped_reason = None
+                    episode.summarize_enabled = True
+
+                episode.processing_status = "pending"
+                episode.error_class = None
+                episode.error_message = None
+                await db.commit()
+
+                # Fire background task
+                import asyncio as _asyncio
+                from app.api.podcasts import _process_episode_background
+                _asyncio.create_task(_process_episode_background(ep_id))
+
+                return f"Verarbeitung von '{episode.title}' gestartet. Laeuft im Hintergrund (Download → Transkription → Zusammenfassung)."
+
+            elif tool_name == "list_podcast_prompts":
+                result = await db.execute(select(PodcastPrompt).order_by(PodcastPrompt.created_at))
+                prompts = result.scalars().all()
+                if not prompts:
+                    return "Keine Podcast-Prompts konfiguriert."
+                items = []
+                for p in prompts:
+                    typ = "Chunk-Summary" if p.prompt_type == "map_summary" else "Gesamt-Summary"
+                    default = " (Default)" if p.is_default else ""
+                    items.append(f"- **{p.name}** | {typ}{default} | v{p.version} | ID: `{p.id}`\n  Auszug: {p.system_prompt[:100]}...")
+                return "\n".join(items)
+
+            elif tool_name == "update_podcast_prompt":
+                prompt_name = args["prompt_name"]
+                result = await db.execute(
+                    select(PodcastPrompt).where(PodcastPrompt.name.ilike(f"%{prompt_name}%"))
+                )
+                prompt = result.scalar_one_or_none()
+                if not prompt:
+                    return f"Kein Prompt mit dem Namen '{prompt_name}' gefunden."
+                old_version = prompt.version
+                if args.get("system_prompt") and args["system_prompt"] != prompt.system_prompt:
+                    prompt.system_prompt = args["system_prompt"]
+                    prompt.version += 1
+                if args.get("name"):
+                    prompt.name = args["name"]
+                if args.get("description"):
+                    prompt.description = args["description"]
+                await db.commit()
+                return f"Prompt '{prompt.name}' aktualisiert (v{old_version} → v{prompt.version})."
+
+            elif tool_name == "get_podcast_queue":
+                from datetime import datetime, timezone
+                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+                status_counts = {}
+                result = await db.execute(
+                    select(PodcastEpisode.processing_status, func.count(PodcastEpisode.id))
+                    .group_by(PodcastEpisode.processing_status)
+                )
+                for status, count in result.all():
+                    status_counts[status] = count
+
+                done_today = await db.scalar(
+                    select(func.count(PodcastEpisode.id))
+                    .where(PodcastEpisode.processing_status == "done", PodcastEpisode.last_processed_at >= today_start)
+                ) or 0
+
+                total = sum(status_counts.values())
+                lines = [
+                    f"**Podcast-Pipeline Status:**",
+                    f"- Pending: {status_counts.get('pending', 0)}",
+                    f"- Downloading: {status_counts.get('downloading', 0)}",
+                    f"- Transcribing: {status_counts.get('transcribing', 0)}",
+                    f"- Summarizing: {status_counts.get('summarizing_chunks', 0) + status_counts.get('reducing', 0)}",
+                    f"- Fehler: {status_counts.get('error', 0)}",
+                    f"- Fertig: {status_counts.get('done', 0)}",
+                    f"- Uebersprungen: {status_counts.get('skipped', 0)}",
+                    f"- Heute fertig: {done_today}",
+                    f"- Gesamt: {total}",
+                ]
+                return "\n".join(lines)
+
+            elif tool_name == "update_podcast_settings":
+                changes = []
+                for key in ["transcription_model", "summary_model"]:
+                    if key in args and args[key] is not None:
+                        db_key = f"podcast_{key}"
+                        result = await db.execute(select(AppSetting).where(AppSetting.key == db_key))
+                        setting = result.scalar_one_or_none()
+                        if setting:
+                            old = setting.value
+                            setting.value = args[key]
+                        else:
+                            old = "(nicht gesetzt)"
+                            db.add(AppSetting(key=db_key, value=args[key]))
+                        changes.append(f"{key}: {old} → {args[key]}")
+                await db.commit()
+                if not changes:
+                    return "Keine Aenderungen vorgenommen."
+                return "Globale Podcast-Einstellungen aktualisiert:\n" + "\n".join(f"- {c}" for c in changes)
 
             else:
                 return f"Unbekanntes Tool: {tool_name}"

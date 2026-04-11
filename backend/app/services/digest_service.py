@@ -11,6 +11,7 @@ from app.models.digest import DigestPolicy, DigestRun, DigestSection
 from app.models.feed import RssItem
 from app.models.weather import WeatherSnapshot
 from app.models.garmin import GarminSnapshot
+from app.services.podcast_delivery_service import get_ready_episodes, render_podcast_digest_section
 from app.llm.provider import get_llm_provider
 from app.llm.prompt_registry import get_prompt
 from app.services.smtp_client import send_email
@@ -1347,7 +1348,12 @@ async def compose_digest(
                 if llm_health_data:
                     health_ai_summary = await generate_health_summary(db, llm_health_data, policy.health_prompt)
 
-        total_items = len(mail_items) + len(feed_items) + (1 if weather_data else 0) + (1 if health_data else 0)
+        # Collect podcast summaries
+        podcast_episodes = []
+        if policy.include_podcasts:
+            podcast_episodes = await get_ready_episodes(db, since=since)
+
+        total_items = len(mail_items) + len(feed_items) + (1 if weather_data else 0) + (1 if health_data else 0) + len(podcast_episodes)
         run.item_count = total_items
 
         # Load display thresholds
@@ -1398,6 +1404,14 @@ async def compose_digest(
             ))
             order += 1
 
+        if podcast_episodes:
+            db.add(DigestSection(
+                run_id=run.id, section_type="podcast", title="Podcasts",
+                content=render_podcast_digest_section(podcast_episodes), order=order,
+                metadata_json={"count": len(podcast_episodes)},
+            ))
+            order += 1
+
         # Build section blocks
         section_blocks = {
             "weather": render_weather_section(weather_data, weather_ai_summary) if weather_data else "",
@@ -1406,6 +1420,7 @@ async def compose_digest(
             "mail": render_mail_section(mail_items, detail_threshold, compact_threshold),
             "feeds": render_feed_section(feed_items) if feed_items else "",
             "unsubscribe": render_unsubscribe_section(mail_items),
+            "podcasts": render_podcast_digest_section(podcast_episodes) if podcast_episodes else "",
         }
         if ai_summary:
             section_blocks["ai_overview"] = f"""
@@ -1418,7 +1433,7 @@ async def compose_digest(
 
         # Determine section order from policy
         import json as _json
-        default_order = ["weather", "health", "ai_overview", "mail", "feeds", "unsubscribe"]
+        default_order = ["weather", "health", "ai_overview", "mail", "podcasts", "feeds", "unsubscribe"]
         try:
             order_list = _json.loads(policy.section_order) if policy.section_order else default_order
         except (ValueError, TypeError):

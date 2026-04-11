@@ -5,7 +5,7 @@ import { PageSpinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
 import {
   FileText, Plus, Trash2, Check, X, Play, Eye, Clock,
-  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown, Heart
+  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown, Heart, Headphones
 } from 'lucide-react'
 
 interface HealthOption {
@@ -31,6 +31,7 @@ interface DigestPolicy {
   since_last_any_digest: boolean
   section_order: string | null
   include_health: boolean
+  include_podcasts: boolean
   health_charts: string[] | null
   health_prompt: string | null
   health_data_types: string[] | null
@@ -188,13 +189,15 @@ export default function DigestsPage() {
   const [healthChartOptions, setHealthChartOptions] = useState<HealthOption[]>([])
   const [healthDataTypeOptions, setHealthDataTypeOptions] = useState<HealthOption[]>([])
   const [editHealthDays, setEditHealthDays] = useState(7)
+  const [editPodcasts, setEditPodcasts] = useState(false)
 
-  const defaultSectionOrder = ['weather', 'health', 'ai_overview', 'mail', 'feeds', 'unsubscribe']
+  const defaultSectionOrder = ['weather', 'health', 'ai_overview', 'mail', 'podcasts', 'feeds', 'unsubscribe']
   const sectionLabels: Record<string, string> = {
     weather: 'Weather',
     health: 'Health',
     ai_overview: 'AI Overview',
     mail: 'Emails',
+    podcasts: 'Podcasts',
     feeds: 'RSS Feeds',
     unsubscribe: 'Unsubscribe Links',
   }
@@ -429,6 +432,7 @@ export default function DigestsPage() {
                       )}
                       {policy.include_weather && <CloudSun className="w-3 h-3" />}
                       {policy.include_feeds && <Rss className="w-3 h-3" />}
+                      {policy.include_podcasts && <Headphones className="w-3 h-3" />}
                       {policy.since_last_any_digest && <span className="text-xs text-primary" title="Since last any digest">cross</span>}
                     </div>
                     {policy.include_categories && (
@@ -462,6 +466,7 @@ export default function DigestsPage() {
                           setEditWeatherPrompt(policy.weather_prompt || '')
                           setEditMaxTokens(policy.max_tokens || 4000)
                           setEditHealth(policy.include_health || false)
+                          setEditPodcasts(policy.include_podcasts || false)
                           setEditHealthCharts(policy.health_charts || [])
                           setEditHealthPrompt(policy.health_prompt || '')
                           setEditHealthDataTypes(policy.health_data_types || [])
@@ -564,6 +569,11 @@ export default function DigestsPage() {
                           <input type="checkbox" checked={editHealth}
                             onChange={e => { setEditHealth(e.target.checked); toggleSection('health', e.target.checked) }} className="rounded" />
                           <Heart className="w-3.5 h-3.5" /> Health
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editPodcasts}
+                            onChange={e => { setEditPodcasts(e.target.checked); toggleSection('podcasts', e.target.checked) }} className="rounded" />
+                          Podcasts
                         </label>
                         <label className="flex items-center gap-2 text-sm text-muted-foreground">
                           <input type="checkbox" checked={editSectionOrder.includes('unsubscribe')}
@@ -718,6 +728,7 @@ export default function DigestsPage() {
                             weather_prompt: editWeatherPrompt || null,
                             section_order: editSectionOrder,
                             include_health: editHealth,
+                            include_podcasts: editPodcasts,
                             health_charts: editHealthCharts.length > 0 ? editHealthCharts : null,
                             health_prompt: editHealthPrompt || null,
                             health_data_types: editHealthDataTypes.length > 0 ? editHealthDataTypes : null,

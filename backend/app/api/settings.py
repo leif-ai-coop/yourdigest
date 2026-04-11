@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.audit import AppSetting
+from app.models.podcast import PodcastFeed
 from app.schemas.common import MessageResponse
 from app.llm.prompt_registry import DEFAULT_CATEGORIES
 
@@ -146,3 +147,56 @@ async def set_assistant_settings(data: AssistantSettings, db: AsyncSession = Dep
         else:
             db.add(AppSetting(key=key, value=str(value)))
     return data.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Podcast Settings
+# ---------------------------------------------------------------------------
+
+class PodcastSettings(BaseModel):
+    transcription_model: str = ""
+    summary_model: str = ""
+
+
+@router.get("/podcasts")
+async def get_podcast_settings(db: AsyncSession = Depends(get_db)):
+    """Get global podcast AI settings."""
+    settings = {}
+    for key in ["podcast_transcription_model", "podcast_summary_model"]:
+        result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting and setting.value:
+            field = key.replace("podcast_", "")
+            settings[field] = setting.value
+    defaults = PodcastSettings()
+    return {**defaults.model_dump(), **settings}
+
+
+@router.put("/podcasts")
+async def set_podcast_settings(data: PodcastSettings, db: AsyncSession = Depends(get_db)):
+    """Set global podcast AI settings."""
+    for key, value in [
+        ("podcast_transcription_model", data.transcription_model),
+        ("podcast_summary_model", data.summary_model),
+    ]:
+        result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = value
+        else:
+            db.add(AppSetting(key=key, value=value))
+    return data.model_dump()
+
+
+@router.post("/podcasts/reset-feeds", response_model=MessageResponse)
+async def reset_feed_models(db: AsyncSession = Depends(get_db)):
+    """Reset all podcast feed models to global defaults (clear individual overrides)."""
+    result = await db.execute(select(PodcastFeed))
+    feeds = result.scalars().all()
+    count = 0
+    for feed in feeds:
+        if feed.transcription_model or feed.summary_model:
+            feed.transcription_model = None
+            feed.summary_model = None
+            count += 1
+    return MessageResponse(message=f"{count} feeds reset to global defaults")

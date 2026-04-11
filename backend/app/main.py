@@ -10,7 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import get_settings
-from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin
+from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts
 
 
 @asynccontextmanager
@@ -19,6 +19,10 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
     logger = logging.getLogger(__name__)
     logger.info("Assistant API starting up")
+
+    # Seed default podcast prompts
+    from app.services.podcast_seed import seed_default_prompts
+    await seed_default_prompts()
 
     if settings.worker_enabled:
         from app.worker.scheduler import start_scheduler, stop_scheduler
@@ -66,3 +70,4 @@ app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"])
+app.include_router(podcasts.router, prefix="/api/podcasts", tags=["podcasts"])

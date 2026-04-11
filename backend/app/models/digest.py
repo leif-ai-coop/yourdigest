@@ -30,6 +30,7 @@ class DigestPolicy(Base, UUIDMixin, TimestampMixin):
     health_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     health_data_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     health_days: Mapped[int] = mapped_column(Integer, default=7)
+    include_podcasts: Mapped[bool] = mapped_column(default=False)
 
 
 class DigestRun(Base, UUIDMixin, TimestampMixin):

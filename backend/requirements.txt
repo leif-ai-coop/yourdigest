@@ -20,3 +20,4 @@ feedparser>=6.0,<7
 slowapi>=0.1,<1
 markdown>=3.5,<4
 garminconnect>=0.2,<1
+pydub>=0.25,<1

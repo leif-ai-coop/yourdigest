@@ -24,6 +24,7 @@ class DigestPolicyCreate(BaseModel):
     health_prompt: str | None = Field(None, max_length=10000)
     health_data_types: list[str] | None = None
     health_days: int = 7
+    include_podcasts: bool = False
 
 
 class DigestPolicyUpdate(BaseModel):
@@ -47,6 +48,7 @@ class DigestPolicyUpdate(BaseModel):
     health_prompt: str | None = Field(None, max_length=10000)
     health_data_types: list[str] | None = None
     health_days: int | None = None
+    include_podcasts: bool | None = None
 
 
 class DigestPolicyResponse(BaseModel):
@@ -71,6 +73,7 @@ class DigestPolicyResponse(BaseModel):
     health_prompt: str | None
     health_data_types: list[str] | None
     health_days: int
+    include_podcasts: bool
     created_at: datetime
     updated_at: datetime
 

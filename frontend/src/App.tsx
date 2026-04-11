@@ -6,6 +6,7 @@ import DigestsPage from './pages/DigestsPage'
 import LogsPage from './pages/LogsPage'
 import AssistantPage from './pages/AssistantPage'
 import HealthPage from './pages/HealthPage'
+import PodcastsPage from './pages/PodcastsPage'
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
           <Route path="/" element={<InboxPage />} />
           <Route path="/assistant" element={<AssistantPage />} />
           <Route path="/health" element={<HealthPage />} />
+          <Route path="/podcasts" element={<PodcastsPage />} />
           <Route path="/digests" element={<DigestsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/logs" element={<LogsPage />} />

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "google/gemini-3.1-flash-lite-preview"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    gemini_api_key: str = ""
     worker_enabled: bool = False
     log_level: str = "info"
     cors_origins: list[str] = ["*"]

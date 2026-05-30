@@ -35,7 +35,7 @@ async def podcast_mail_job(policy_id: str):
                 .limit(1)
             )
             last_run = result.scalars().first()
-            since = last_run.completed_at if last_run else datetime.now(timezone.utc) - timedelta(days=7)
+            since = last_run.completed_at if last_run else None
 
             run = await send_podcast_mail(db, policy, since=since)
             await db.commit()

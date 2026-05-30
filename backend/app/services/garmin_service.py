@@ -45,7 +45,6 @@ def _login_sync(email: str, password: str, account_id: str):
     from garminconnect import Garmin
 
     token_dir = _token_dir(account_id)
-    client = Garmin()
 
     # Try to resume session from saved tokens
     try:
@@ -56,10 +55,9 @@ def _login_sync(email: str, password: str, account_id: str):
     except Exception:
         logger.info(f"No valid saved session for {email}, logging in fresh")
 
-    # Fresh login
+    # Fresh login — tokenstore parameter handles saving automatically
     client = Garmin(email=email, password=password)
-    client.login()
-    client.garth.dump(token_dir)
+    client.login(token_dir)
     logger.info(f"Garmin login successful for {email}, tokens saved")
     return client
 

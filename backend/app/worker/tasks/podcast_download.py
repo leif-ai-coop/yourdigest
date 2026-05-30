@@ -1,29 +1,30 @@
 """
 Worker task: Download audio for pending podcast episodes.
-Picks episodes with processing_status='pending' and discovery_status='accepted',
-downloads audio, then chunks it.
+Two paths:
+  - Gemini API: Download → transcribe full audio (no chunking)
+  - OpenRouter: Download → chunk → (transcription handled by podcast_transcribe job)
 """
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 
 from app.database import async_session
-from app.models.podcast import PodcastEpisode
+from app.models.podcast import PodcastEpisode, PodcastFeed
 from app.services.podcast_processing_service import (
-    download_episode_audio, chunk_episode_audio, release_stale_locks,
+    download_episode_audio, chunk_episode_audio, transcribe_episode_gemini,
+    summarize_episode, cleanup_episode_audio, release_stale_locks, _use_gemini_direct,
 )
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT = 2  # Process up to 2 episodes per run
+MAX_CONCURRENT = 2
 
 
 async def podcast_download_job():
-    """Periodic job: download and chunk pending podcast episodes."""
+    """Periodic job: download and process pending podcast episodes."""
     async with async_session() as db:
         try:
-            # Release stale locks first
             await release_stale_locks(db)
             await db.commit()
         except Exception as e:
@@ -32,7 +33,6 @@ async def podcast_download_job():
 
     async with async_session() as db:
         try:
-            # Find episodes ready for download
             result = await db.execute(
                 select(PodcastEpisode)
                 .where(
@@ -51,7 +51,6 @@ async def podcast_download_job():
                 return
 
             for episode in episodes:
-                # Check retry_after
                 if episode.retry_after and episode.retry_after > datetime.now(timezone.utc):
                     continue
 
@@ -61,11 +60,30 @@ async def podcast_download_job():
                     await db.commit()
                     continue
 
-                # Chunk immediately after download
-                success = await chunk_episode_audio(db, episode)
-                if success:
-                    episode.processing_status = "transcribing"
-                await db.commit()
+                if _use_gemini_direct():
+                    # Gemini path: transcribe full audio in one call
+                    feed = await db.get(PodcastFeed, episode.feed_id)
+                    model = feed.transcription_model if feed and feed.transcription_model else None
+                    success = await transcribe_episode_gemini(db, episode, model=model)
+                    if not success:
+                        await db.commit()
+                        continue
+                    # Transcription done — summarize immediately
+                    from app.models.podcast import PodcastPrompt
+                    prompt = None
+                    if feed and feed.reduce_prompt_id:
+                        prompt = await db.get(PodcastPrompt, feed.reduce_prompt_id)
+                    summary_model = feed.summary_model if feed and feed.summary_model else None
+                    success = await summarize_episode(db, episode, prompt=prompt, model=summary_model)
+                    if success:
+                        await cleanup_episode_audio(db, episode)
+                    await db.commit()
+                else:
+                    # OpenRouter path: chunk, then transcribe/summarize handled by other workers
+                    success = await chunk_episode_audio(db, episode)
+                    if success:
+                        episode.processing_status = "transcribing"
+                    await db.commit()
 
             logger.info(f"Podcast download job processed {len(episodes)} episodes")
 

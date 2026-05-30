@@ -1,6 +1,7 @@
 """
 Podcast API Router — CRUD for feeds, episodes, prompts, mail policies, queue status.
 """
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -9,7 +10,7 @@ from sqlalchemy import select, desc, func, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db
+from app.database import get_db, async_session
 from app.exceptions import NotFoundError
 from app.schemas.common import MessageResponse
 from app.schemas.podcast import (
@@ -259,7 +260,7 @@ async def skip_episode(episode_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 
 @router.post("/episodes/{episode_id}/process")
 async def process_episode_now(episode_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Queue an episode for immediate processing. Returns instantly, runs in background."""
+    """Queue an episode for immediate processing. Returns instantly, runs in background sequentially."""
     episode = await db.get(PodcastEpisode, episode_id)
     if not episode:
         raise NotFoundError("Episode not found")
@@ -280,27 +281,81 @@ async def process_episode_now(episode_id: uuid.UUID, db: AsyncSession = Depends(
     episode.processing_status = "pending"
     episode.error_class = None
     episode.error_message = None
-    await db.flush()
+    # Must commit before starting worker — worker uses separate session
+    await db.commit()
 
-    # Fire background task
+    # Start background worker if not already running
     import asyncio
-    asyncio.create_task(_process_episode_background(str(episode_id)))
+    task = asyncio.ensure_future(_ensure_queue_worker())
+    task.add_done_callback(_worker_done_callback)
 
-    return {"message": "Processing started", "status": "started"}
+    return {"message": "Processing queued", "status": "queued"}
 
 
-async def _process_episode_background(episode_id_str: str):
-    """Run the full pipeline for one episode in the background."""
-    import logging
+def _worker_done_callback(task):
+    """Log any unhandled exception from the queue worker task."""
+    if task.exception():
+        logging.getLogger(__name__).error(f"Queue worker task crashed: {task.exception()}", exc_info=task.exception())
+
+
+# ---------------------------------------------------------------------------
+# Sequential processing worker (DB-based queue, one at a time)
+# ---------------------------------------------------------------------------
+
+_worker_running = False
+
+
+async def _ensure_queue_worker():
+    """Start the queue worker if not already running. Picks pending episodes from DB."""
+    global _worker_running
+    _log = logging.getLogger(__name__)
+    if _worker_running:
+        _log.debug("Queue worker already running, skipping")
+        return
+    _worker_running = True
+    _log.info("Queue worker started")
+
+    try:
+        while True:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(PodcastEpisode)
+                    .where(
+                        PodcastEpisode.processing_status == "pending",
+                        PodcastEpisode.discovery_status == "accepted",
+                        PodcastEpisode.summarize_enabled == True,
+                        PodcastEpisode.locked_at.is_(None),
+                    )
+                    .order_by(PodcastEpisode.created_at.desc())
+                    .limit(1)
+                )
+                episode = result.scalars().first()
+                if not episode:
+                    _log.info("Queue worker: no more pending episodes, stopping")
+                    break
+                episode_id = str(episode.id)
+                _log.info(f"Queue worker: processing episode {episode.title}")
+
+            try:
+                await _process_single_episode(episode_id)
+            except Exception as e:
+                _log.error(f"Queue worker: episode {episode_id} failed: {e}", exc_info=True)
+    except Exception as e:
+        _log.error(f"Queue worker error: {e}", exc_info=True)
+    finally:
+        _worker_running = False
+        _log.info("Queue worker stopped")
+
+
+async def _process_single_episode(episode_id_str: str):
+    """Run the full pipeline for one episode. Auto-selects Gemini or OpenRouter path."""
     from uuid import UUID
-    from app.database import async_session
     from app.services.podcast_processing_service import (
         download_episode_audio, chunk_episode_audio,
-        transcribe_chunk, map_summarize_chunk, reduce_summarize_episode,
-        cleanup_episode_audio,
+        transcribe_chunk, transcribe_episode_gemini,
+        summarize_episode, cleanup_episode_audio, _use_gemini_direct,
     )
 
-    logger = logging.getLogger(__name__)
     episode_id = UUID(episode_id_str)
 
     async with async_session() as db:
@@ -316,60 +371,53 @@ async def _process_episode_background(episode_id_str: str):
                     await db.commit()
                     return
 
-            # Stage 2: Chunk
-            if not episode.chunk_count:
-                if not await chunk_episode_audio(db, episode):
+            transcription_model = feed.transcription_model if feed else None
+
+            if _use_gemini_direct():
+                # Gemini path: single transcription call on full audio
+                if not await transcribe_episode_gemini(db, episode, model=transcription_model):
                     await db.commit()
                     return
-                episode.processing_status = "transcribing"
-                await db.commit()
-
-            # Stage 3: Transcribe
-            from sqlalchemy import select as sa_select
-            result = await db.execute(
-                sa_select(PodcastEpisodeChunk)
-                .where(PodcastEpisodeChunk.episode_id == episode.id)
-                .order_by(PodcastEpisodeChunk.chunk_index)
-            )
-            chunks = result.scalars().all()
-
-            transcription_model = feed.transcription_model if feed else None
-            for chunk in chunks:
-                if not chunk.transcript_text:
+            else:
+                # OpenRouter path: chunk → transcribe each chunk
+                if not episode.chunk_count:
+                    if not await chunk_episode_audio(db, episode):
+                        await db.commit()
+                        return
                     episode.processing_status = "transcribing"
-                    await db.flush()
-                    if not await transcribe_chunk(db, chunk, model=transcription_model):
-                        await db.commit()
-                        return
                     await db.commit()
 
-            # Stage 4: Map-summarize
-            episode.processing_status = "summarizing_chunks"
-            await db.commit()
-            map_prompt = None
-            if feed and feed.map_prompt_id:
-                map_prompt = await db.get(PodcastPrompt, feed.map_prompt_id)
-            summary_model = feed.summary_model if feed else None
+                from sqlalchemy import select as sa_select
+                result = await db.execute(
+                    sa_select(PodcastEpisodeChunk)
+                    .where(PodcastEpisodeChunk.episode_id == episode.id)
+                    .order_by(PodcastEpisodeChunk.chunk_index)
+                )
+                chunks = result.scalars().all()
 
-            for chunk in chunks:
-                if not chunk.map_summary_text:
-                    if not await map_summarize_chunk(db, chunk, prompt=map_prompt, model=summary_model):
+                for chunk in chunks:
+                    if not chunk.transcript_text:
+                        episode.processing_status = "transcribing"
+                        await db.flush()
+                        if not await transcribe_chunk(db, chunk, model=transcription_model):
+                            await db.commit()
+                            return
                         await db.commit()
-                        return
-                    await db.commit()
 
-            # Stage 5: Reduce
+            # Stage: Summarize (single call on full transcript)
             reduce_prompt = None
             if feed and feed.reduce_prompt_id:
                 reduce_prompt = await db.get(PodcastPrompt, feed.reduce_prompt_id)
-            if await reduce_summarize_episode(db, episode, prompt=reduce_prompt, model=summary_model):
+            summary_model = feed.summary_model if feed else None
+
+            if await summarize_episode(db, episode, prompt=reduce_prompt, model=summary_model):
                 await cleanup_episode_audio(db, episode)
             await db.commit()
 
-            logger.info(f"Background processing completed for episode {episode_id_str}")
+            logger.info(f"Queue processing completed for episode {episode_id_str}")
 
         except Exception as e:
-            logger.error(f"Background processing failed for episode {episode_id_str}: {e}")
+            logger.error(f"Queue processing failed for episode {episode_id_str}: {e}")
             await db.rollback()
 
 
@@ -379,7 +427,7 @@ async def resummarize_episode(
     prompt_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Trigger re-summarization of an episode (keeps transcript, regenerates summary)."""
+    """Re-summarize an episode using existing transcript. Runs in background."""
     episode = await db.get(PodcastEpisode, episode_id)
     if not episode:
         raise NotFoundError("Episode not found")
@@ -393,29 +441,44 @@ async def resummarize_episode(
         )
     )
     if not result.scalar_one_or_none():
-        raise NotFoundError("No transcript found — episode must be fully processed first")
+        raise NotFoundError("Kein Transkript vorhanden — Episode muss erst vollstaendig verarbeitet werden")
 
-    # Reset to summarizing_chunks stage (chunks still have transcripts)
-    result = await db.execute(
-        select(PodcastEpisodeChunk)
-        .where(PodcastEpisodeChunk.episode_id == episode_id)
-    )
-    chunks = result.scalars().all()
-
-    for chunk in chunks:
-        if chunk.transcript_text:
-            chunk.map_summary_text = None
-            chunk.map_summary_model = None
-            chunk.status = "pending"
-            chunk.completed_at = None
-
-    episode.processing_status = "pending"
+    episode.processing_status = "summarizing"
     episode.error_class = None
     episode.error_message = None
-    episode.locked_at = None
+    await db.commit()
 
-    await db.flush()
-    return {"message": "Re-summarization queued", "episode_id": str(episode_id)}
+    # Run summary in background
+    import asyncio
+    asyncio.ensure_future(_resummarize_background(str(episode_id), str(prompt_id) if prompt_id else None))
+
+    return {"message": "Re-Summarization gestartet", "episode_id": str(episode_id)}
+
+
+async def _resummarize_background(episode_id_str: str, prompt_id_str: str | None):
+    """Run summary on existing transcript in the background."""
+    from uuid import UUID
+    from app.services.podcast_processing_service import summarize_episode
+
+    try:
+        async with async_session() as db:
+            episode = await db.get(PodcastEpisode, UUID(episode_id_str))
+            if not episode:
+                return
+            feed = await db.get(PodcastFeed, episode.feed_id)
+
+            prompt = None
+            if prompt_id_str:
+                prompt = await db.get(PodcastPrompt, UUID(prompt_id_str))
+            elif feed and feed.reduce_prompt_id:
+                prompt = await db.get(PodcastPrompt, feed.reduce_prompt_id)
+
+            summary_model = feed.summary_model if feed and feed.summary_model else None
+            await summarize_episode(db, episode, prompt=prompt, model=summary_model)
+            await db.commit()
+            logger.info(f"Re-summarized episode '{episode.title}'")
+    except Exception as e:
+        logger.error(f"Re-summarize failed for {episode_id_str}: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +541,10 @@ async def list_mail_policies(db: AsyncSession = Depends(get_db)):
 
 @router.post("/mail-policies", response_model=PodcastMailPolicyResponse, status_code=201)
 async def create_mail_policy(data: PodcastMailPolicyCreate, db: AsyncSession = Depends(get_db)):
-    policy = PodcastMailPolicy(**data.model_dump())
+    dump = data.model_dump()
+    if dump.get("feed_filter"):
+        dump["feed_filter"] = [str(x) for x in dump["feed_filter"]]
+    policy = PodcastMailPolicy(**dump)
     db.add(policy)
     await db.flush()
     await db.refresh(policy)
@@ -496,6 +562,8 @@ async def update_mail_policy(policy_id: uuid.UUID, data: PodcastMailPolicyUpdate
     if not policy:
         raise NotFoundError("Policy not found")
     for key, value in data.model_dump(exclude_unset=True).items():
+        if key == "feed_filter" and value:
+            value = [str(x) for x in value]
         setattr(policy, key, value)
     await db.flush()
     await db.refresh(policy)
@@ -558,13 +626,34 @@ async def list_processing_runs(
 
 @router.get("/delivery-runs", response_model=list[PodcastDeliveryRunResponse])
 async def list_delivery_runs(
+    policy_id: uuid.UUID | None = None,
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(PodcastDeliveryRun).order_by(desc(PodcastDeliveryRun.started_at)).limit(limit)
-    )
+    query = select(PodcastDeliveryRun).order_by(desc(PodcastDeliveryRun.started_at)).limit(limit)
+    if policy_id:
+        query = query.where(PodcastDeliveryRun.policy_id == policy_id)
+    result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/delivery-runs/{run_id}/episodes")
+async def get_delivery_run_episodes(run_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Get episodes included in a specific delivery run."""
+    result = await db.execute(
+        select(
+            PodcastDeliveryRunEpisode,
+            PodcastEpisode.title,
+            PodcastFeed.title.label("feed_title"),
+        )
+        .join(PodcastEpisode, PodcastEpisode.id == PodcastDeliveryRunEpisode.episode_id)
+        .join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id)
+        .where(PodcastDeliveryRunEpisode.run_id == run_id)
+    )
+    return [
+        {"episode_title": row[1], "feed_title": row[2]}
+        for row in result.all()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -598,14 +687,16 @@ async def get_queue_status(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(func.count(PodcastEpisode.id)))
     total = result.scalar() or 0
 
+    active_statuses = ["downloading", "chunking", "transcribing", "summarizing_chunks", "reducing"]
+    active = sum(status_counts.get(s, 0) for s in active_statuses)
+
     return PodcastQueueStatus(
-        pending_downloads=status_counts.get("pending", 0),
-        active_downloads=status_counts.get("downloading", 0) + status_counts.get("chunking", 0),
-        pending_transcriptions=status_counts.get("transcribing", 0),
-        active_transcriptions=status_counts.get("transcribing", 0),
-        pending_summaries=status_counts.get("summarizing_chunks", 0) + status_counts.get("reducing", 0),
-        active_summaries=status_counts.get("summarizing_chunks", 0) + status_counts.get("reducing", 0),
+        queued=status_counts.get("pending", 0),
+        active=active,
+        manual_queue=1 if _worker_running else 0,
         errors=status_counts.get("error", 0),
+        done=status_counts.get("done", 0),
         done_today=done_today,
+        skipped=status_counts.get("skipped", 0),
         total_episodes=total,
     )

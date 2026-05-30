@@ -138,7 +138,7 @@ async def _find_existing_episode(
 
 async def fetch_podcast_feed(db: AsyncSession, feed: PodcastFeed) -> int:
     """Fetch a podcast RSS feed and create new episodes. Returns count of new episodes."""
-    headers = {}
+    headers = {"User-Agent": "YouDigest/1.0 (Podcast RSS Reader)"}
     if feed.etag:
         headers["If-None-Match"] = feed.etag
     if feed.last_modified:

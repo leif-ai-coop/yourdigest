@@ -282,12 +282,11 @@ class PodcastDeliveryRunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class PodcastQueueStatus(BaseModel):
-    pending_downloads: int
-    active_downloads: int
-    pending_transcriptions: int
-    active_transcriptions: int
-    pending_summaries: int
-    active_summaries: int
+    queued: int          # pending (waiting for processing)
+    active: int          # downloading, chunking, transcribing, summarizing, reducing
+    manual_queue: int    # in the manual /process queue
     errors: int
+    done: int
     done_today: int
+    skipped: int
     total_episodes: int

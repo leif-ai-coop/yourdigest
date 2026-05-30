@@ -2,66 +2,59 @@
 Seed default podcast prompts on startup.
 """
 import logging
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.database import async_session
 from app.models.podcast import PodcastPrompt
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAP_PROMPT = """Du bist ein Podcast-Zusammenfasser. Erstelle eine strukturierte Zusammenfassung des folgenden Podcast-Abschnitts.
-
-Regeln:
-- Fasse die Kernaussagen in klaren Bulletpoints zusammen
-- Behalte wichtige Namen, Zahlen und Fakten bei
-- Ignoriere Werbung, Sponsor-Hinweise und Eigenwerbung
-- Schreibe auf Deutsch, es sei denn der Podcast ist auf Englisch
-- Sei praegnant aber vollstaendig"""
-
-DEFAULT_REDUCE_PROMPT = """Du bist ein Podcast-Zusammenfasser. Dir werden Zusammenfassungen einzelner Abschnitte eines Podcasts gegeben. Erstelle daraus eine kohaerente Gesamtzusammenfassung.
+DEFAULT_SUMMARY_PROMPT = """Du bist ein Podcast-Zusammenfasser. Dir wird das vollstaendige Transkript einer Podcast-Episode gegeben. Erstelle daraus eine strukturierte Zusammenfassung.
 
 Regeln:
 - Fasse die wichtigsten Erkenntnisse und Aussagen zusammen
 - Strukturiere thematisch, nicht chronologisch
-- Entferne Redundanzen zwischen den Abschnitten
-- Behalte wichtige Details, Zitate und Fakten bei
+- Behalte wichtige Namen, Zahlen und Fakten bei
+- Ignoriere Werbung, Sponsor-Hinweise und Eigenwerbung
 - Schreibe auf Deutsch, es sei denn der Podcast ist auf Englisch
 - Laenge: ausfuehrlich aber praegnant"""
 
-DEFAULTS = [
-    {
-        "name": "Standard Chunk-Summary",
-        "description": "Zusammenfassung einzelner Podcast-Abschnitte (Map-Phase)",
-        "system_prompt": DEFAULT_MAP_PROMPT,
-        "prompt_type": "map_summary",
-        "is_default": True,
-    },
-    {
-        "name": "Standard Gesamt-Summary",
-        "description": "Gesamtzusammenfassung aus Abschnitts-Summaries (Reduce-Phase)",
-        "system_prompt": DEFAULT_REDUCE_PROMPT,
-        "prompt_type": "reduce_summary",
-        "is_default": True,
-    },
-]
-
 
 async def seed_default_prompts():
-    """Create default podcast prompts if they don't exist yet."""
+    """Create/update default podcast summary prompt. Remove obsolete map_summary prompt."""
     try:
         async with async_session() as db:
-            for default in DEFAULTS:
-                result = await db.execute(
-                    select(PodcastPrompt).where(
-                        PodcastPrompt.prompt_type == default["prompt_type"],
-                        PodcastPrompt.is_default == True,
-                    )
+            # Remove obsolete map_summary default prompt
+            await db.execute(
+                delete(PodcastPrompt).where(
+                    PodcastPrompt.prompt_type == "map_summary",
+                    PodcastPrompt.is_default == True,
                 )
-                if result.scalar_one_or_none():
-                    continue
+            )
 
-                prompt = PodcastPrompt(**default)
+            # Ensure reduce_summary default exists
+            result = await db.execute(
+                select(PodcastPrompt).where(
+                    PodcastPrompt.prompt_type == "reduce_summary",
+                    PodcastPrompt.is_default == True,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update name/description if still the old Map-Reduce wording
+                if "Abschnitts-Summaries" in (existing.description or ""):
+                    existing.description = "Standard-Prompt fuer Podcast-Zusammenfassungen"
+                    existing.name = "Standard Summary"
+            else:
+                prompt = PodcastPrompt(
+                    name="Standard Summary",
+                    description="Standard-Prompt fuer Podcast-Zusammenfassungen",
+                    system_prompt=DEFAULT_SUMMARY_PROMPT,
+                    prompt_type="reduce_summary",
+                    is_default=True,
+                )
                 db.add(prompt)
-                logger.info(f"Seeded default podcast prompt: {default['name']}")
+                logger.info("Seeded default podcast summary prompt")
 
             await db.commit()
     except Exception as e:

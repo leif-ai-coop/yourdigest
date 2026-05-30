@@ -5,6 +5,8 @@ import html
 import logging
 from datetime import datetime, timezone
 
+import markdown as md
+
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,27 +28,56 @@ async def get_ready_episodes(
     feed_ids: list | None = None,
 ) -> list[tuple[PodcastEpisode, PodcastArtifact, str | None]]:
     """Get episodes with active summaries ready for delivery.
+    If since is set: all done episodes with summary created after since.
+    If since is None: the latest done episode per feed (fallback for first run).
     Returns list of (episode, summary_artifact, feed_title) tuples.
     """
-    query = (
-        select(PodcastEpisode, PodcastArtifact, PodcastFeed.title)
-        .join(PodcastArtifact, and_(
-            PodcastArtifact.episode_id == PodcastEpisode.id,
-            PodcastArtifact.artifact_type == "summary",
-            PodcastArtifact.is_active == True,
-        ))
-        .join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id)
-        .where(PodcastEpisode.processing_status == "done")
-        .order_by(PodcastEpisode.published_at.desc())
-    )
-
     if since:
-        query = query.where(PodcastArtifact.created_at >= since)
-    if feed_ids:
-        query = query.where(PodcastEpisode.feed_id.in_(feed_ids))
+        # Normal mode: everything since last delivery
+        query = (
+            select(PodcastEpisode, PodcastArtifact, PodcastFeed.title)
+            .join(PodcastArtifact, and_(
+                PodcastArtifact.episode_id == PodcastEpisode.id,
+                PodcastArtifact.artifact_type == "summary",
+                PodcastArtifact.is_active == True,
+            ))
+            .join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id)
+            .where(PodcastEpisode.processing_status == "done")
+            .where(PodcastArtifact.created_at >= since)
+            .order_by(PodcastEpisode.published_at.desc())
+        )
+        if feed_ids:
+            query = query.where(PodcastEpisode.feed_id.in_(feed_ids))
+        result = await db.execute(query)
+        return result.all()
 
-    result = await db.execute(query)
-    return result.all()
+    # First run: latest done episode per feed
+    from sqlalchemy import distinct
+    feed_query = select(PodcastFeed.id)
+    if feed_ids:
+        feed_query = feed_query.where(PodcastFeed.id.in_(feed_ids))
+    feed_result = await db.execute(feed_query)
+    all_feed_ids = [r[0] for r in feed_result.all()]
+
+    episodes = []
+    for fid in all_feed_ids:
+        result = await db.execute(
+            select(PodcastEpisode, PodcastArtifact, PodcastFeed.title)
+            .join(PodcastArtifact, and_(
+                PodcastArtifact.episode_id == PodcastEpisode.id,
+                PodcastArtifact.artifact_type == "summary",
+                PodcastArtifact.is_active == True,
+            ))
+            .join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id)
+            .where(PodcastEpisode.feed_id == fid)
+            .where(PodcastEpisode.processing_status == "done")
+            .order_by(PodcastEpisode.published_at.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row:
+            episodes.append(row)
+    return episodes
 
 
 def render_podcast_mail_html(
@@ -73,7 +104,7 @@ def render_podcast_mail_html(
                 mins = episode.duration_seconds // 60
                 duration_str = f" &middot; {mins} min"
 
-            summary_html = html.escape(artifact.content or "").replace("\n", "<br>")
+            summary_html = md.markdown(artifact.content or "", extensions=["nl2br"])
 
             feed_html += f'''
             <div style="margin:0 0 20px 0;padding:16px;background:#1e1e2e;border-radius:8px;border-left:3px solid #6366f1;">
@@ -203,11 +234,7 @@ def render_podcast_digest_section(
         feed_name = html.escape(feed_title or "")
         date_str = episode.published_at.strftime("%d.%m.") if episode.published_at else ""
 
-        # Truncate summary for digest
-        summary = artifact.content or ""
-        if len(summary) > 500:
-            summary = summary[:497] + "..."
-        summary_html = html.escape(summary).replace("\n", "<br>")
+        summary_html = md.markdown(artifact.content or "", extensions=["nl2br"])
 
         items_html.append(f'''
         <div style="margin:0 0 16px 0;padding:12px;background:#1e1e2e;border-radius:6px;">

@@ -118,15 +118,31 @@ interface PodcastMailPolicy {
   created_at: string
 }
 
+interface DeliveryRun {
+  id: string
+  delivery_channel: string
+  policy_id: string | null
+  started_at: string
+  completed_at: string | null
+  status: string
+  episode_count: number
+  error: string | null
+  created_at: string
+}
+
+interface DeliveryRunEpisode {
+  episode_title: string
+  feed_title: string
+}
+
 interface QueueStatus {
-  pending_downloads: number
-  active_downloads: number
-  pending_transcriptions: number
-  active_transcriptions: number
-  pending_summaries: number
-  active_summaries: number
+  queued: number
+  active: number
+  manual_queue: number
   errors: number
+  done: number
   done_today: number
+  skipped: number
   total_episodes: number
 }
 
@@ -174,6 +190,7 @@ function StatusBadge({ status }: { status: string }) {
     chunking: 'bg-blue-500/20 text-blue-400',
     transcribing: 'bg-indigo-500/20 text-indigo-400',
     summarizing_chunks: 'bg-purple-500/20 text-purple-400',
+    summarizing: 'bg-purple-500/20 text-purple-400',
     reducing: 'bg-purple-500/20 text-purple-400',
     skipped: 'bg-gray-500/20 text-gray-400',
     new: 'bg-cyan-500/20 text-cyan-400',
@@ -214,6 +231,9 @@ export default function PodcastsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchFields, setSearchFields] = useState<Set<string>>(new Set(['title', 'description', 'summary', 'transcript']))
   const [showSearchSettings, setShowSearchSettings] = useState(false)
+  const [policyRuns, setPolicyRuns] = useState<Record<string, DeliveryRun | null>>({})
+  const [expandedPolicyRun, setExpandedPolicyRun] = useState<string | null>(null)
+  const [runEpisodes, setRunEpisodes] = useState<Record<string, DeliveryRunEpisode[]>>({})
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [processing, setProcessing] = useState<Set<string>>(new Set())
   const [feedSidebarOpen, setFeedSidebarOpen] = useState(true)
@@ -261,6 +281,15 @@ export default function PodcastsPage() {
   const loadPolicies = useCallback(async () => {
     const data = await api.get<PodcastMailPolicy[]>('/podcasts/mail-policies')
     setPolicies(data)
+    // Load last delivery run per policy
+    const runs: Record<string, DeliveryRun | null> = {}
+    for (const p of data) {
+      try {
+        const r = await api.get<DeliveryRun[]>(`/podcasts/delivery-runs?policy_id=${p.id}&limit=1`)
+        runs[p.id] = r.length > 0 ? r[0] : null
+      } catch { runs[p.id] = null }
+    }
+    setPolicyRuns(runs)
   }, [])
 
   const loadQueue = useCallback(async () => {
@@ -363,32 +392,58 @@ export default function PodcastsPage() {
     if (selectedEpisode?.id === id) await loadEpisodeDetail(id)
   }
 
+  // Track processing IDs via ref so polling always sees current state
+  const processingRef = useRef<Set<string>>(new Set())
+  const pollingRef = useRef(false)
+
   const processNow = async (id: string) => {
-    if (processing.has(id)) return
-    setProcessing(prev => new Set(prev).add(id))
+    if (processingRef.current.has(id)) return
+    processingRef.current.add(id)
+    setProcessing(new Set(processingRef.current))
     try {
       await api.post<{ message: string; status: string }>(`/podcasts/episodes/${id}/process`)
     } catch { /* ignore — status tracked via polling */ }
-    pollEpisodeStatus(id)
+    startPolling()
   }
 
-  const pollEpisodeStatus = useCallback((id: string) => {
+  const startPolling = useCallback(() => {
+    if (pollingRef.current) return
+    pollingRef.current = true
     const poll = async () => {
       try {
-        const ep = await api.get<PodcastEpisode>(`/podcasts/episodes/${id}`)
-        if (['pending', 'downloading', 'chunking', 'transcribing', 'summarizing_chunks', 'reducing'].includes(ep.processing_status)) {
-          setTimeout(poll, 5000)
-          return
+        try { await loadEpisodes(selectedFeedRef.current) } catch {}
+        try { await loadQueue() } catch {}
+        // Check each tracked episode
+        const stillActive = new Set<string>()
+        const activeStatuses = ['pending', 'downloading', 'chunking', 'transcribing', 'summarizing_chunks', 'summarizing', 'reducing']
+        for (const id of processingRef.current) {
+          try {
+            const ep = await api.get<PodcastEpisode>(`/podcasts/episodes/${id}`)
+            if (activeStatuses.includes(ep.processing_status)) {
+              stillActive.add(id)
+            }
+            // Update selected episode status in-place
+            setSelectedEpisode(prev => prev?.id === id ? { ...prev, processing_status: ep.processing_status } : prev)
+          } catch (err) { console.error('Poll failed for episode', id, err) }
         }
-        // Done or error — stop polling
-        setProcessing(prev => { const next = new Set(prev); next.delete(id); return next })
-        await loadEpisodes(selectedFeedRef.current)
-        await loadQueue()
-      } catch {
-        setProcessing(prev => { const next = new Set(prev); next.delete(id); return next })
+        processingRef.current = stillActive
+        setProcessing(new Set(stillActive))
+        if (stillActive.size > 0) {
+          setTimeout(poll, 8000)
+        } else {
+          pollingRef.current = false
+        }
+      } catch (err) {
+        console.error('Poll cycle error, retrying', err)
+        // Don't stop polling on transient errors — keep trying
+        if (processingRef.current.size > 0) {
+          setTimeout(poll, 10000)
+        } else {
+          pollingRef.current = false
+        }
       }
     }
-    setTimeout(poll, 3000)
+    setTimeout(poll, 4000)
   }, [])
 
   const resummarize = async (id: string) => {
@@ -417,14 +472,18 @@ export default function PodcastsPage() {
 
   // Policy actions
   const savePolicy = async (data: Record<string, unknown>, id?: string) => {
-    if (id) {
-      await api.put(`/podcasts/mail-policies/${id}`, data)
-    } else {
-      await api.post('/podcasts/mail-policies', data)
+    try {
+      if (id) {
+        await api.put(`/podcasts/mail-policies/${id}`, data)
+      } else {
+        await api.post('/podcasts/mail-policies', data)
+      }
+      await loadPolicies()
+      setShowAddPolicy(false)
+      setEditingPolicy(null)
+    } catch (e: any) {
+      alert(`Fehler beim Speichern: ${e.message || e}`)
     }
-    await loadPolicies()
-    setShowAddPolicy(false)
-    setEditingPolicy(null)
   }
 
   const deletePolicy = async (id: string) => {
@@ -433,9 +492,20 @@ export default function PodcastsPage() {
     await loadPolicies()
   }
 
+  const [runningPolicy, setRunningPolicy] = useState<string | null>(null)
   const runPolicy = async (id: string, hours: number = 24) => {
-    await api.post(`/podcasts/mail-policies/${id}/run?since_hours=${hours}`)
-    await loadQueue()
+    setRunningPolicy(id)
+    try {
+      const result = await api.post<{ status: string; episode_count: number; error: string | null }>(`/podcasts/mail-policies/${id}/run?since_hours=${hours}`)
+      if (result.error) {
+        alert(`Versand fehlgeschlagen: ${result.error}`)
+      }
+      await loadPolicies()
+      await loadQueue()
+    } catch (e: any) {
+      alert(`Fehler: ${e.message || e}`)
+    }
+    setRunningPolicy(null)
   }
 
   if (loading) return <PageSpinner />
@@ -456,10 +526,10 @@ export default function PodcastsPage() {
           <Headphones className="w-5 h-5 text-primary" /> Podcasts
         </h1>
         <div className="flex items-center gap-2">
-          {queue && (queue.pending_downloads > 0 || queue.errors > 0) && (
+          {queue && (queue.active > 0 || queue.manual_queue > 0 || queue.errors > 0) && (
             <div className="flex items-center gap-2 text-xs">
-              {queue.pending_downloads > 0 && (
-                <span className="text-yellow-400">{queue.pending_downloads} pending</span>
+              {(queue.active > 0 || queue.manual_queue > 0) && (
+                <span className="text-blue-400">{queue.active + queue.manual_queue} aktiv</span>
               )}
               {queue.errors > 0 && (
                 <span className="text-red-400">{queue.errors} errors</span>
@@ -719,8 +789,17 @@ export default function PodcastsPage() {
                       {selectedEpisode.duration_seconds && <span>{formatDuration(selectedEpisode.duration_seconds)}</span>}
                       {selectedEpisode.episode_number && <span>Ep. {selectedEpisode.episode_number}</span>}
                       {selectedEpisode.chunk_count && <span>{selectedEpisode.chunk_count} Chunks</span>}
-                      <StatusBadge status={selectedEpisode.processing_status} />
-                      <StatusBadge status={selectedEpisode.discovery_status} />
+                      {selectedEpisode.discovery_status === 'skipped' ? (
+                        <span className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 text-xs">uebersprungen</span>
+                      ) : selectedEpisode.processing_status === 'done' ? (
+                        <StatusBadge status="done" />
+                      ) : selectedEpisode.processing_status === 'error' ? (
+                        <StatusBadge status="error" />
+                      ) : selectedEpisode.discovery_status === 'accepted' && selectedEpisode.processing_status === 'pending' ? (
+                        <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 text-xs font-medium">in Queue</span>
+                      ) : !['pending', 'skipped', 'new'].includes(selectedEpisode.processing_status) ? (
+                        <StatusBadge status={selectedEpisode.processing_status} />
+                      ) : null}
                     </div>
                   </div>
 
@@ -772,8 +851,11 @@ export default function PodcastsPage() {
 
                   {/* Processing indicator */}
                   {processing.has(selectedEpisode.id) && (
-                    <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-sm text-blue-300">
-                      Verarbeitung laeuft im Hintergrund... Du kannst weiter navigieren.
+                    <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-sm text-blue-300 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />
+                      <span>
+                        {{ pending: 'In Warteschlange...', downloading: 'Audio wird heruntergeladen...', chunking: 'Audio wird in Abschnitte zerlegt...', transcribing: 'Wird transkribiert...', summarizing: 'Wird zusammengefasst...', summarizing_chunks: 'Wird zusammengefasst...', reducing: 'Wird zusammengefasst...' }[selectedEpisode.processing_status] || 'Verarbeitung laeuft...'}
+                      </span>
                     </div>
                   )}
 
@@ -882,9 +964,7 @@ export default function PodcastsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <span className="font-medium text-sm">{p.name}</span>
-                  <span className={`ml-2 px-1.5 py-0.5 text-xs rounded ${p.prompt_type === 'map_summary' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
-                    {p.prompt_type === 'map_summary' ? 'Chunk' : 'Gesamt'}
-                  </span>
+                  <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-purple-500/20 text-purple-400">Summary</span>
                   {p.is_default && <span className="ml-1 px-1.5 py-0.5 text-xs bg-primary/20 text-primary rounded">Default</span>}
                   <span className="ml-2 text-xs text-muted-foreground">v{p.version}</span>
                 </div>
@@ -937,8 +1017,8 @@ export default function PodcastsPage() {
                   </span>
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={() => runPolicy(p.id)} className="p-1 rounded hover:bg-secondary text-primary" title="Jetzt ausfuehren">
-                    <Play className="w-4 h-4" />
+                  <button onClick={() => runPolicy(p.id)} disabled={runningPolicy === p.id} className="p-1 rounded hover:bg-secondary text-primary disabled:opacity-50" title="Jetzt ausfuehren">
+                    {runningPolicy === p.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   </button>
                   <button onClick={() => setEditingPolicy(p)} className="p-1 rounded hover:bg-secondary text-muted-foreground">
                     <Settings2 className="w-4 h-4" />
@@ -953,6 +1033,51 @@ export default function PodcastsPage() {
                 <span>An: {p.target_email}</span>
                 {p.feed_filter && <span>Feeds: {p.feed_filter.length}</span>}
               </div>
+
+              {/* Last delivery run */}
+              {policyRuns[p.id] ? (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <button
+                    onClick={() => {
+                      const runId = policyRuns[p.id]!.id
+                      if (expandedPolicyRun === runId) {
+                        setExpandedPolicyRun(null)
+                      } else {
+                        setExpandedPolicyRun(runId)
+                        if (!runEpisodes[runId]) {
+                          api.get<DeliveryRunEpisode[]>(`/podcasts/delivery-runs/${runId}/episodes`)
+                            .then(eps => setRunEpisodes(prev => ({ ...prev, [runId]: eps })))
+                        }
+                      }
+                    }}
+                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 w-full text-left"
+                  >
+                    <ChevronRight className={`w-3 h-3 transition-transform ${expandedPolicyRun === policyRuns[p.id]!.id ? 'rotate-90' : ''}`} />
+                    Letzter Versand: {formatDateTime(policyRuns[p.id]!.completed_at || policyRuns[p.id]!.started_at)}
+                    <span className="ml-1">&middot; {policyRuns[p.id]!.episode_count} Episoden</span>
+                    <StatusBadge status={policyRuns[p.id]!.status} />
+                  </button>
+                  {expandedPolicyRun === policyRuns[p.id]!.id && runEpisodes[policyRuns[p.id]!.id] && (
+                    <div className="mt-2 ml-4 space-y-1">
+                      {runEpisodes[policyRuns[p.id]!.id].map((ep, i) => (
+                        <div key={i} className="text-xs text-muted-foreground">
+                          <span className="text-primary">{ep.feed_title}</span> &middot; {ep.episode_title}
+                        </div>
+                      ))}
+                      {runEpisodes[policyRuns[p.id]!.id].length === 0 && (
+                        <div className="text-xs text-muted-foreground">Keine Episoden in diesem Versand.</div>
+                      )}
+                    </div>
+                  )}
+                  {policyRuns[p.id]!.error && (
+                    <div className="text-xs text-red-400 mt-1">{policyRuns[p.id]!.error}</div>
+                  )}
+                </div>
+              ) : policyRuns[p.id] === null ? (
+                <div className="mt-3 pt-3 border-t border-border text-xs text-muted-foreground">
+                  Noch kein Versand.
+                </div>
+              ) : null}
             </div>
           ))}
 
@@ -967,8 +1092,8 @@ export default function PodcastsPage() {
           {/* Queue Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
-              { label: 'Pending', value: queue.pending_downloads, color: 'text-yellow-400' },
-              { label: 'Aktiv', value: queue.active_downloads + queue.active_transcriptions + queue.active_summaries, color: 'text-blue-400' },
+              { label: 'Warteschlange', value: queue.queued + queue.manual_queue, color: 'text-yellow-400' },
+              { label: 'Aktiv', value: queue.active, color: 'text-blue-400' },
               { label: 'Fehler', value: queue.errors, color: 'text-red-400' },
               { label: 'Heute fertig', value: queue.done_today, color: 'text-green-400' },
             ].map(s => (
@@ -1047,17 +1172,13 @@ function PromptForm({ prompt, onSave, onCancel }: {
   const [name, setName] = useState(prompt?.name || '')
   const [desc, setDesc] = useState(prompt?.description || '')
   const [text, setText] = useState(prompt?.system_prompt || '')
-  const [promptType, setPromptType] = useState(prompt?.prompt_type || 'map_summary')
+  const [promptType] = useState('reduce_summary')
   const [isDefault, setIsDefault] = useState(prompt?.is_default || false)
 
   return (
     <div className="p-4 bg-card rounded-lg border border-border space-y-3">
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Prompt-Name" className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border" />
       <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Beschreibung (optional)" className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border" />
-      <select value={promptType} onChange={e => setPromptType(e.target.value)} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border">
-        <option value="map_summary">Chunk-Summary (Map-Phase)</option>
-        <option value="reduce_summary">Gesamt-Summary (Reduce-Phase)</option>
-      </select>
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder="System-Prompt..." rows={8} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border font-mono" />
       <div className="flex items-center gap-4">
         <label className="flex items-center gap-2 text-sm">
@@ -1088,12 +1209,32 @@ function PolicyForm({ policy, feeds, prompts, onSave, onCancel }: {
   const [selectedFeeds, setSelectedFeeds] = useState<string[]>(policy?.feed_filter || [])
   const [enabled, setEnabled] = useState(policy?.enabled ?? true)
 
+  const cronPresets = [
+    { label: 'Taeglich 8:00', value: '0 8 * * *' },
+    { label: 'Taeglich 18:00', value: '0 18 * * *' },
+    { label: 'Montags 8:00', value: '0 8 * * 1' },
+    { label: 'Freitags 18:00', value: '0 18 * * 5' },
+    { label: 'Werktags 8:00', value: '0 8 * * 1-5' },
+  ]
+
   return (
     <div className="p-4 bg-card rounded-lg border border-border space-y-3">
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Policy-Name" className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border" />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <input value={cron} onChange={e => setCron(e.target.value)} placeholder="Cron (z.B. 0 8 * * 1)" className="px-3 py-2 text-sm bg-secondary rounded border border-border" />
-        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Ziel-Email" className="px-3 py-2 text-sm bg-secondary rounded border border-border" />
+      <div>
+        <label className="text-xs text-muted-foreground">Ziel-Email</label>
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com" className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border" />
+      </div>
+      <div>
+        <label className="text-xs text-muted-foreground">Zeitplan</label>
+        <div className="flex flex-wrap gap-1 mb-2">
+          {cronPresets.map(p => (
+            <button key={p.value} onClick={() => setCron(p.value)} className={`px-2 py-1 text-xs rounded ${cron === p.value ? 'bg-primary/20 text-primary' : 'bg-secondary text-muted-foreground'}`}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <input value={cron} onChange={e => setCron(e.target.value)} className="w-full px-3 py-2 text-xs bg-secondary rounded border border-border font-mono" />
+        <div className="text-xs text-muted-foreground mt-1">Format: Minute Stunde Tag Monat Wochentag (0=So, 1=Mo, ..., 5=Fr)</div>
       </div>
       <select value={promptId} onChange={e => setPromptId(e.target.value)} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border">
         <option value="">Standard-Prompt</option>
@@ -1261,6 +1402,7 @@ function FeedSettingsModal({ feed, prompts, onSave, onClose }: {
   const [form, setForm] = useState({
     title: feed.title || '',
     enabled: feed.enabled,
+    url: feed.url,
     auto_process_new: feed.auto_process_new,
     map_prompt_id: feed.map_prompt_id || '',
     reduce_prompt_id: feed.reduce_prompt_id || '',
@@ -1290,6 +1432,7 @@ function FeedSettingsModal({ feed, prompts, onSave, onClose }: {
   const handleSave = () => {
     const patterns = form.ignore_title_patterns.split('\n').map(s => s.trim()).filter(Boolean)
     onSave({
+      url: form.url,
       title: form.title || null,
       enabled: form.enabled,
       auto_process_new: form.auto_process_new,
@@ -1313,6 +1456,11 @@ function FeedSettingsModal({ feed, prompts, onSave, onClose }: {
         <h3 className="text-lg font-semibold">Feed-Einstellungen</h3>
 
         <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground">Feed-URL</label>
+            <input value={form.url} onChange={e => setForm({...form, url: e.target.value})} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border font-mono text-xs" />
+          </div>
+
           <div>
             <label className="text-xs text-muted-foreground">Titel</label>
             <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border" />
@@ -1363,18 +1511,10 @@ function FeedSettingsModal({ feed, prompts, onSave, onClose }: {
           </div>
 
           <div>
-            <label className="text-xs text-muted-foreground">Chunk-Summary Prompt (Map-Phase)</label>
-            <select value={form.map_prompt_id} onChange={e => setForm({...form, map_prompt_id: e.target.value})} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border">
-              <option value="">System-Default</option>
-              {prompts.filter(p => p.prompt_type === 'map_summary').map(p => <option key={p.id} value={p.id}>{p.name} (v{p.version})</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs text-muted-foreground">Gesamt-Summary Prompt (Reduce-Phase)</label>
+            <label className="text-xs text-muted-foreground">Summary-Prompt</label>
             <select value={form.reduce_prompt_id} onChange={e => setForm({...form, reduce_prompt_id: e.target.value})} className="w-full px-3 py-2 text-sm bg-secondary rounded border border-border">
               <option value="">System-Default</option>
-              {prompts.filter(p => p.prompt_type === 'reduce_summary').map(p => <option key={p.id} value={p.id}>{p.name} (v{p.version})</option>)}
+              {prompts.map(p => <option key={p.id} value={p.id}>{p.name} (v{p.version})</option>)}
             </select>
           </div>
 

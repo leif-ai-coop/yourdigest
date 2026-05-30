@@ -10,7 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import get_settings
-from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts
+from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts, depot
 
 
 @asynccontextmanager
@@ -71,3 +71,4 @@ app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"]
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"])
 app.include_router(podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+app.include_router(depot.router, prefix="/api/depot", tags=["depot"])

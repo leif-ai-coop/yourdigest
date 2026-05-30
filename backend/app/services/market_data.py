@@ -1,0 +1,90 @@
+"""Marktdaten via Yahoo Finance (kostenlos, kein API-Key).
+
+ISIN -> Symbol ueber den Search-Endpoint, Kurs ueber den v8-Chart-Endpoint
+(funktioniert ohne crumb/cookie, im Gegensatz zum v7-quote-Endpoint).
+"""
+import logging
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
+
+async def resolve_symbol(client: httpx.AsyncClient, isin: str) -> str | None:
+    """ISIN (oder Suchbegriff) -> Yahoo-Symbol. None wenn kein Treffer."""
+    if not isin:
+        return None
+    try:
+        resp = await client.get(
+            _SEARCH_URL, params={"q": isin, "quotesCount": 5, "newsCount": 0}
+        )
+        resp.raise_for_status()
+        quotes = resp.json().get("quotes", [])
+        if not quotes:
+            return None
+        # Bevorzuge eine Notierung in EUR/Deutschland, sonst erstes Ergebnis.
+        for q in quotes:
+            sym = q.get("symbol", "")
+            if sym.endswith((".DE", ".F", ".SG", ".MU", ".BE", ".DU", ".HM", ".HA")):
+                return sym
+        return quotes[0].get("symbol")
+    except Exception as e:
+        logger.warning(f"Yahoo symbol-resolve fehlgeschlagen fuer {isin}: {e}")
+        return None
+
+
+async def fetch_quote(client: httpx.AsyncClient, symbol: str) -> dict | None:
+    """Aktueller Kurs + Tagesveraenderung fuer ein Symbol."""
+    if not symbol:
+        return None
+    try:
+        resp = await client.get(_CHART_URL.format(symbol=symbol), params={"interval": "1d", "range": "5d"})
+        resp.raise_for_status()
+        result = resp.json().get("chart", {}).get("result")
+        if not result:
+            return None
+        meta = result[0].get("meta", {})
+        price = meta.get("regularMarketPrice")
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if price is None:
+            return None
+        day_change_pct = None
+        if prev:
+            try:
+                day_change_pct = round((price - prev) / prev * 100, 4)
+            except ZeroDivisionError:
+                day_change_pct = None
+        return {
+            "price": float(price),
+            "currency": meta.get("currency"),
+            "day_change_pct": day_change_pct,
+            "symbol": meta.get("symbol", symbol),
+        }
+    except Exception as e:
+        logger.warning(f"Yahoo quote fehlgeschlagen fuer {symbol}: {e}")
+        return None
+
+
+async def get_price_by_isin(client: httpx.AsyncClient, isin: str, cached_symbol: str | None = None) -> dict | None:
+    """Komplettpfad: (gecachtes) Symbol -> Kurs. Gibt None bei Misserfolg."""
+    symbol = cached_symbol or await resolve_symbol(client, isin)
+    if not symbol:
+        return None
+    quote = await fetch_quote(client, symbol)
+    if quote:
+        quote["symbol"] = quote.get("symbol") or symbol
+    return quote
+
+
+def new_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=15, headers=_HEADERS, follow_redirects=True)

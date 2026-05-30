@@ -10,6 +10,7 @@ from app.models.llm import LlmProviderConfig, LlmTask, LlmPromptVersion
 from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.audit import AuditLog, AppSetting
 from app.models.garmin import GarminAccount, GarminSnapshot
+from app.models.depot import DepotPosition, DepotSnapshot
 from app.models.podcast import (
     PodcastFeed, PodcastEpisode, PodcastEpisodeChunk, PodcastArtifact,
     PodcastPrompt, PodcastProcessingRun, PodcastMailPolicy,
@@ -29,6 +30,7 @@ __all__ = [
     "AssistantConversation", "AssistantMessage",
     "AuditLog", "AppSetting",
     "GarminAccount", "GarminSnapshot",
+    "DepotPosition", "DepotSnapshot",
     "PodcastFeed", "PodcastEpisode", "PodcastEpisodeChunk", "PodcastArtifact",
     "PodcastPrompt", "PodcastProcessingRun", "PodcastMailPolicy",
     "PodcastDeliveryRun", "PodcastDeliveryRunEpisode",

@@ -19,11 +19,13 @@ async def start_scheduler():
     from app.worker.tasks.podcast_download import podcast_download_job
     from app.worker.tasks.podcast_transcribe import podcast_transcribe_job
     from app.worker.tasks.podcast_summarize import podcast_summarize_job
+    from app.worker.tasks.depot_refresh import depot_refresh_job
 
     scheduler.add_job(mail_fetch_job, "interval", minutes=5, id="mail_fetch", replace_existing=True)
     scheduler.add_job(feed_fetch_job, "interval", minutes=30, id="feed_fetch", replace_existing=True)
     scheduler.add_job(weather_fetch_job, "interval", minutes=60, id="weather_fetch", replace_existing=True)
     scheduler.add_job(garmin_fetch_job, "interval", minutes=60, id="garmin_fetch", replace_existing=True)
+    scheduler.add_job(depot_refresh_job, "interval", minutes=60, id="depot_refresh", replace_existing=True)
 
     # Podcast pipeline jobs
     scheduler.add_job(podcast_fetch_job, "interval", minutes=30, id="podcast_fetch", replace_existing=True)

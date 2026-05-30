@@ -7,6 +7,7 @@ import LogsPage from './pages/LogsPage'
 import AssistantPage from './pages/AssistantPage'
 import HealthPage from './pages/HealthPage'
 import PodcastsPage from './pages/PodcastsPage'
+import DepotPage from './pages/DepotPage'
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="/assistant" element={<AssistantPage />} />
           <Route path="/health" element={<HealthPage />} />
           <Route path="/podcasts" element={<PodcastsPage />} />
+          <Route path="/depot" element={<DepotPage />} />
           <Route path="/digests" element={<DigestsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/logs" element={<LogsPage />} />

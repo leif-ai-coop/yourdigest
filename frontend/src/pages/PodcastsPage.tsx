@@ -624,15 +624,15 @@ export default function PodcastsPage() {
                     <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${feed.enabled ? 'translate-x-3' : ''}`} />
                   </button>
                   <span className="truncate font-medium flex-1 min-w-0">{feed.title || feed.url}</span>
-                  <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0">
-                    <button onClick={e => { e.stopPropagation(); syncFeed(feed.id) }} className="p-0.5 rounded hover:bg-secondary" title="Sync">
-                      <RefreshCw className={`w-3 h-3 ${syncing === feed.id ? 'animate-spin' : ''}`} />
+                  <div className="flex md:opacity-0 md:group-hover:opacity-100 transition-opacity items-center gap-0.5 flex-shrink-0">
+                    <button onClick={e => { e.stopPropagation(); syncFeed(feed.id) }} className="p-1.5 rounded hover:bg-secondary" title="Sync">
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncing === feed.id ? 'animate-spin' : ''}`} />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); setEditingFeed(feed) }} className="p-0.5 rounded hover:bg-secondary" title="Settings">
-                      <Settings2 className="w-3 h-3" />
+                    <button onClick={e => { e.stopPropagation(); setEditingFeed(feed) }} className="p-1.5 rounded hover:bg-secondary" title="Settings">
+                      <Settings2 className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={e => { e.stopPropagation(); deleteFeed(feed.id) }} className="p-0.5 rounded hover:bg-secondary text-red-400" title="Loeschen">
-                      <Trash2 className="w-3 h-3" />
+                    <button onClick={e => { e.stopPropagation(); deleteFeed(feed.id) }} className="p-1.5 rounded hover:bg-secondary text-red-400" title="Loeschen">
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
@@ -1458,8 +1458,8 @@ function FeedSettingsModal({ feed, prompts, onSave, onClose }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="bg-card rounded-lg border border-border p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto space-y-4" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/60 p-0 md:p-4" onClick={onClose}>
+      <div className="bg-card rounded-t-2xl md:rounded-lg border border-border p-6 w-full max-w-lg max-h-[85vh] md:max-h-[80vh] overflow-y-auto space-y-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold">Feed-Einstellungen</h3>
 
         <div className="space-y-3">

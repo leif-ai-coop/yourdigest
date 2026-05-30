@@ -44,6 +44,21 @@ def _norm_name(name: str | None) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
 
+def _clean_security_name(name: str | None) -> str:
+    """ING-Kurznamen fuer die Marktdaten-Suche bereinigen.
+
+    Entfernt Nominalwert-Suffixe wie 'DL-,01', 'EO 1', 'HD-00001', 'YC 1'
+    sowie Aktiengattungs-Kuerzel, die die Yahoo-Suche stoeren.
+    """
+    if not name:
+        return ""
+    n = name.strip()
+    # Nominalwert-/Waehrungs-Suffixe am Ende (DL=Dollar, EO=Euro, HD, YC, SF, NK, LS, ...)
+    n = re.sub(r"\b(?:DL|EO|HD|YC|SF|NK|LS|DM|CHF|GBP)[-.,/ 0-9]*$", "", n, flags=re.IGNORECASE)
+    n = re.sub(r"\s+", " ", n).strip(" .,-")
+    return n
+
+
 def _to_data_url(image: str) -> str:
     image = image.strip()
     if image.startswith("data:"):
@@ -200,11 +215,13 @@ async def refresh_prices(db: AsyncSession) -> dict:
     refreshed = stale = 0
     async with market_data.new_client() as client:
         for p in positions:
-            if not p.isin:
+            # Primaer ueber ISIN, sonst Fallback ueber bereinigten Namen.
+            query = p.isin or _clean_security_name(p.name)
+            if not query:
                 p.price_stale = True
                 stale += 1
                 continue
-            quote = await market_data.get_price_by_isin(client, p.isin, p.market_symbol)
+            quote = await market_data.get_price_by_isin(client, query, p.market_symbol)
             # Waehrungs-Guard: Kurs nur uebernehmen, wenn die Waehrung zur Position passt.
             # Verhindert, dass z.B. ein USD-Listing als EUR-Wert verbucht wird.
             if quote and quote.get("currency") and p.currency and quote["currency"].upper() != p.currency.upper():

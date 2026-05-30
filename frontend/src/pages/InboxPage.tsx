@@ -689,7 +689,7 @@ export default function InboxPage() {
                     a.setAttribute('rel', 'noopener noreferrer')
                   })
                 }}
-                className="mail-body prose prose-invert prose-sm max-w-none overflow-x-hidden break-words min-w-0 [&_img]:max-w-full [&_img]:h-auto [&_table]:w-full [&_table]:max-w-full [&_table]:table-fixed [&_td]:max-w-full [&_div]:max-w-full"
+                className="mail-body prose prose-invert prose-sm max-w-none overflow-x-auto break-words min-w-0 [&_img]:max-w-full [&_img]:h-auto [&_table]:max-w-full [&_div]:max-w-full"
                 dangerouslySetInnerHTML={{ __html: stripStyleTags(selected.body_html) }}
               />
             ) : (

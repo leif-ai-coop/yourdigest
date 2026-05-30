@@ -360,6 +360,8 @@ def render_unsubscribe_section(items: list[dict]) -> str:
 def _google_calendar_url(title: str, due_date: str, all_day: bool = True) -> str:
     """Build a Google Calendar 'add event' URL."""
     from urllib.parse import quote
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Berlin")
     try:
         dt = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
@@ -368,11 +370,20 @@ def _google_calendar_url(title: str, due_date: str, all_day: bool = True) -> str
     if all_day:
         start = dt.strftime("%Y%m%d")
         end = (dt + timedelta(days=1)).strftime("%Y%m%d")
-    else:
-        start = dt.strftime("%Y%m%dT%H%M%SZ")
-        end = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")
+        return f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={quote(title)}&dates={start}/{end}"
 
-    return f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={quote(title)}&dates={start}/{end}"
+    # Termin-Zeiten als lokale Zeit (Europe/Berlin) behandeln. Wenn tz-aware,
+    # dorthin konvertieren; sonst lokal annehmen. Statt 'Z' (UTC) die lokale
+    # Wandzeit + &ctz=Europe/Berlin verwenden — sonst verschiebt Google um den
+    # UTC-Offset (Sommer 2h, Winter 1h).
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(tz)
+    start = dt.strftime("%Y%m%dT%H%M%S")
+    end = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+    return (
+        f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={quote(title)}"
+        f"&dates={start}/{end}&ctz=Europe/Berlin"
+    )
 
 
 def render_events_section(items: list[dict]) -> str:
@@ -662,7 +673,8 @@ CRITICAL CONTENT RULES:
 7. Do NOT include unsubscribe links in your output — they are handled separately below your summary.
 8. EVENTS/DATES: If you find dates, deadlines, appointments or events in any email, add a "Termine & Fristen" section. For EACH event, include a Google Calendar link using this exact format:
    <a href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=TITLE&dates=YYYYMMDD/YYYYMMDD">📅 Kalender</a>
-   For timed events use: dates=YYYYMMDDTHHMMSSZ/YYYYMMDDTHHMMSSZ (UTC).
+   For timed events use the LOCAL time exactly as written in the email (do NOT convert to UTC, do NOT append 'Z') and append the timezone parameter:
+   dates=YYYYMMDDTHHMMSS/YYYYMMDDTHHMMSS&ctz=Europe/Berlin
    For all-day events use: dates=YYYYMMDD/NEXT_DAY_YYYYMMDD.
    URL-encode the title (spaces as %20). Include ALL detected events, not just those with due_date set."""
 

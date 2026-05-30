@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { api } from '../api/client'
 import { PageSpinner, Spinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
-import { Wallet, Upload, RefreshCw, Plus, Trash2, Pencil, X, AlertTriangle, TrendingUp, TrendingDown, Code } from 'lucide-react'
+import { Wallet, Upload, RefreshCw, Plus, Trash2, Pencil, X, AlertTriangle, TrendingUp, TrendingDown, Code, History, ChevronUp, ChevronDown } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -82,6 +82,30 @@ const fmtNum = (v: number | null | undefined, d = 2) =>
 const fmtPct = (v: number | null | undefined) =>
   v == null ? '–' : `${v > 0 ? '+' : ''}${fmtNum(v, 2)} %`
 
+type SortKey = 'name' | 'quantity' | 'avg_buy_price' | 'last_price' | 'last_value' | 'dev' | 'day_change_pct'
+
+function sortValue(p: Position, key: SortKey): number | string {
+  switch (key) {
+    case 'name': return (p.name || '').toLowerCase()
+    case 'dev': return p.avg_buy_price && p.last_price ? (p.last_price - p.avg_buy_price) / p.avg_buy_price : -Infinity
+    default: return (p[key] as number | null) ?? -Infinity
+  }
+}
+
+function SortTh({ label, sortKey, sort, onSort, className = '' }: {
+  label: string; sortKey: SortKey; sort: { key: SortKey; dir: 'asc' | 'desc' }; onSort: (k: SortKey) => void; className?: string
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th className={`font-medium px-3 py-2 cursor-pointer select-none hover:text-foreground ${className}`} onClick={() => onSort(sortKey)}>
+      <span className="inline-flex items-center gap-0.5">
+        {label}
+        {active && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+      </span>
+    </th>
+  )
+}
+
 export default function DepotPage() {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
@@ -96,7 +120,22 @@ export default function DepotPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [showHtml, setShowHtml] = useState(false)
   const [htmlText, setHtmlText] = useState('')
+  const [backfilling, setBackfilling] = useState(false)
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>(() => {
+    try {
+      const s = localStorage.getItem('depotSort')
+      if (s) return JSON.parse(s)
+    } catch { /* ignore */ }
+    return { key: 'last_value', dir: 'desc' }
+  })
   const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    try { localStorage.setItem('depotSort', JSON.stringify(sort)) } catch { /* ignore */ }
+  }, [sort])
+
+  const toggleSort = (key: SortKey) =>
+    setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' })
 
   const load = useCallback(async () => {
     try {
@@ -199,6 +238,19 @@ export default function DepotPage() {
     }
   }
 
+  const backfill = async () => {
+    setBackfilling(true)
+    setError(null)
+    try {
+      await api.post('/depot/backfill-history?days=365', {})
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verlauf laden fehlgeschlagen')
+    } finally {
+      setBackfilling(false)
+    }
+  }
+
   const deletePos = async (id: string) => {
     if (!confirm('Position wirklich loeschen?')) return
     await api.delete(`/depot/positions/${id}`)
@@ -209,6 +261,15 @@ export default function DepotPage() {
 
   const totals = overview?.totals
   const positions = overview?.positions || []
+  const sortedPositions = useMemo(() => {
+    const arr = [...positions]
+    arr.sort((a, b) => {
+      const va = sortValue(a, sort.key), vb = sortValue(b, sort.key)
+      const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+    return arr
+  }, [positions, sort])
   // Pro Kalendertag nur den letzten Snapshot (sonst erscheint "heute" mehrfach)
   const byDay = new Map<string, { t: string; v: number | null }>()
   for (const s of snapshots) {
@@ -240,6 +301,11 @@ export default function DepotPage() {
           <button onClick={refreshPrices} disabled={refreshing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80 disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Kurse
+          </button>
+          <button onClick={backfill} disabled={backfilling}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80 disabled:opacity-50"
+            title="Historischen Wertverlauf aus Marktdaten laden (mit aktuellen Stückzahlen)">
+            <History className={`w-4 h-4 ${backfilling ? 'animate-pulse' : ''}`} /> Verlauf
           </button>
           <button onClick={() => setShowAdd(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80">
@@ -323,18 +389,18 @@ export default function DepotPage() {
             <table className="w-full text-sm">
               <thead className="text-xs text-muted-foreground border-b border-border">
                 <tr>
-                  <th className="text-left font-medium px-3 py-2">Wertpapier</th>
-                  <th className="text-right font-medium px-3 py-2">Stück</th>
-                  <th className="text-right font-medium px-3 py-2 hidden sm:table-cell">Kaufkurs</th>
-                  <th className="text-right font-medium px-3 py-2 hidden md:table-cell">Kurs</th>
-                  <th className="text-right font-medium px-3 py-2">Wert</th>
-                  <th className="text-right font-medium px-3 py-2">± seit Kauf</th>
-                  <th className="text-right font-medium px-3 py-2 hidden lg:table-cell">Δ Tag</th>
+                  <SortTh label="Wertpapier" sortKey="name" sort={sort} onSort={toggleSort} className="text-left" />
+                  <SortTh label="Stück" sortKey="quantity" sort={sort} onSort={toggleSort} className="text-right [&>span]:flex-row-reverse" />
+                  <SortTh label="Kaufkurs" sortKey="avg_buy_price" sort={sort} onSort={toggleSort} className="text-right hidden sm:table-cell [&>span]:flex-row-reverse" />
+                  <SortTh label="Kurs" sortKey="last_price" sort={sort} onSort={toggleSort} className="text-right hidden md:table-cell [&>span]:flex-row-reverse" />
+                  <SortTh label="Wert" sortKey="last_value" sort={sort} onSort={toggleSort} className="text-right [&>span]:flex-row-reverse" />
+                  <SortTh label="± seit Kauf" sortKey="dev" sort={sort} onSort={toggleSort} className="text-right [&>span]:flex-row-reverse" />
+                  <SortTh label="Δ Tag" sortKey="day_change_pct" sort={sort} onSort={toggleSort} className="text-right hidden lg:table-cell [&>span]:flex-row-reverse" />
                   <th className="text-right font-medium px-3 py-2 w-16"></th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map(p => {
+                {sortedPositions.map(p => {
                   const devPct = p.avg_buy_price && p.last_price ? (p.last_price - p.avg_buy_price) / p.avg_buy_price * 100 : null
                   const devAbs = p.avg_buy_price != null && p.last_price != null && p.quantity != null
                     ? (p.last_price - p.avg_buy_price) * p.quantity : null

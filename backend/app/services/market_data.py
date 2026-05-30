@@ -86,6 +86,33 @@ async def get_price_by_isin(client: httpx.AsyncClient, isin: str, cached_symbol:
     return quote
 
 
+async def fetch_history(client: httpx.AsyncClient, symbol: str, range_: str = "3mo") -> dict | None:
+    """Taegliche Schlusskurse fuer ein Symbol. Liefert {'currency', 'closes': {date_iso: close}}."""
+    if not symbol:
+        return None
+    try:
+        resp = await client.get(_CHART_URL.format(symbol=symbol), params={"interval": "1d", "range": range_})
+        resp.raise_for_status()
+        result = resp.json().get("chart", {}).get("result")
+        if not result:
+            return None
+        r0 = result[0]
+        ts = r0.get("timestamp") or []
+        quote = (r0.get("indicators", {}).get("quote") or [{}])[0]
+        closes = quote.get("close") or []
+        out: dict[str, float] = {}
+        from datetime import datetime as _dt, timezone as _tz
+        for t, c in zip(ts, closes):
+            if c is None:
+                continue
+            d = _dt.fromtimestamp(t, tz=_tz.utc).date().isoformat()
+            out[d] = float(c)
+        return {"currency": r0.get("meta", {}).get("currency"), "closes": out}
+    except Exception as e:
+        logger.warning(f"Yahoo history fehlgeschlagen fuer {symbol}: {e}")
+        return None
+
+
 async def fetch_fx_rate(client: httpx.AsyncClient, currency: str) -> float | None:
     """Wechselkurs: wie viele EUR ist 1 Einheit von `currency` wert.
 

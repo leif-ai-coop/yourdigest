@@ -115,6 +115,13 @@ async def refresh_prices(db: AsyncSession = Depends(get_db)):
     return await overview(db)
 
 
+@router.post("/backfill-history", response_model=DepotOverview)
+async def backfill_history(days: int = Query(90, ge=7, le=1825), db: AsyncSession = Depends(get_db)):
+    """Historische Kurse via Yahoo ziehen und Wertverlauf-Snapshots anlegen."""
+    await depot_service.backfill_history(db, days=days)
+    return await overview(db)
+
+
 @router.get("/snapshots", response_model=list[DepotSnapshotOut])
 async def list_snapshots(
     limit: int = Query(90, ge=1, le=365),

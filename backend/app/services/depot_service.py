@@ -336,6 +336,112 @@ async def refresh_prices(db: AsyncSession) -> dict:
     return {"refreshed": refreshed, "stale": stale}
 
 
+def _range_for_days(days: int) -> str:
+    for limit, label in [(7, "1mo"), (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y")]:
+        if days <= limit:
+            return label
+    return "5y"
+
+
+async def backfill_history(db: AsyncSession, days: int = 90) -> dict:
+    """Rekonstruiert den Depotwert-Verlauf aus historischen Yahoo-Kursen.
+
+    Naeherung: nutzt die AKTUELLEN Stueckzahlen (vergangene Kaeufe/Verkaeufe
+    sind nicht erfasst). FX-Umrechnung mit historischem Tageskurs. Legt nur
+    Snapshots fuer Tage an, die noch keinen Snapshot haben (heute ausgenommen).
+    """
+    import bisect
+
+    positions = (await db.execute(
+        select(DepotPosition).where(DepotPosition.is_active == True)  # noqa: E712
+    )).scalars().all()
+    range_ = _range_for_days(days)
+
+    existing_days = set()
+    for snap in (await db.execute(select(DepotSnapshot))).scalars().all():
+        if snap.captured_at:
+            existing_days.add(snap.captured_at.date().isoformat())
+
+    series: dict = {}   # pid -> (sorted_dates, {date: eur_price}, quantity)
+    all_dates: set[str] = set()
+    fx_hist: dict[str, dict] = {}
+
+    async with market_data.new_client() as client:
+        for p in positions:
+            if p.quantity is None:
+                continue
+            sym = p.market_symbol
+            if not sym and p.isin:
+                sym = await market_data.resolve_symbol(client, p.isin)
+            if not sym:
+                for nm in (_clean_security_name(p.name), _clean_security_name_aggressive(p.name)):
+                    if nm:
+                        sym = await market_data.resolve_symbol(client, nm)
+                        if sym:
+                            break
+            if not sym:
+                continue
+            hist = await market_data.fetch_history(client, sym, range_)
+            if not hist or not hist["closes"]:
+                continue
+            cur = (hist.get("currency") or p.currency or "EUR").upper()
+            target = (p.currency or "EUR").upper()
+            fxh = None
+            if cur != target:
+                if cur not in fx_hist:
+                    base = "GBP" if (cur in ("GBP", "GBX") or hist.get("currency") == "GBp") else cur
+                    fxd = await market_data.fetch_history(client, f"{base}EUR=X", range_)
+                    fx_hist[cur] = fxd or {"closes": {}}
+                fxh = fx_hist[cur]["closes"]
+                pence = cur in ("GBP", "GBX") or hist.get("currency") == "GBp"
+
+            eur_prices: dict[str, float] = {}
+            fx_dates = sorted(fxh.keys()) if fxh is not None else []
+            for d, close in hist["closes"].items():
+                if fxh is None:
+                    eur_prices[d] = close
+                else:
+                    rate = fxh.get(d)
+                    if rate is None and fx_dates:
+                        idx = bisect.bisect_right(fx_dates, d) - 1
+                        rate = fxh[fx_dates[idx]] if idx >= 0 else None
+                    if rate is None:
+                        continue
+                    eur_prices[d] = close * (rate / 100 if pence else rate)
+            if eur_prices:
+                sd = sorted(eur_prices.keys())
+                series[p.id] = (sd, eur_prices, float(p.quantity))
+                all_dates.update(sd)
+
+    # Pro Tag aufsummieren (forward-fill je Position; Tag nur wenn alle Positionen Daten haben)
+    inserted = 0
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    for d in sorted(all_dates):
+        if d == today_iso or d in existing_days:
+            continue
+        total = 0.0
+        complete = True
+        for sd, pmap, qty in series.values():
+            idx = bisect.bisect_right(sd, d) - 1
+            if idx < 0:
+                complete = False
+                break
+            total += pmap[sd[idx]] * qty
+        if not complete:
+            continue
+        db.add(DepotSnapshot(
+            captured_at=datetime.fromisoformat(f"{d}T18:00:00+00:00"),
+            total_value=round(total, 2),
+            currency="EUR",
+            source="history",
+        ))
+        existing_days.add(d)
+        inserted += 1
+
+    await db.flush()
+    return {"inserted": inserted, "positions": len(series)}
+
+
 async def _create_snapshot(db: AsyncSession, source: str) -> None:
     totals = await compute_totals(db)
     positions = (await db.execute(

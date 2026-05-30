@@ -243,6 +243,8 @@ export default function PodcastsPage() {
   const [globalAppDefault, setGlobalAppDefault] = useState('')
   // Mobile: show detail instead of list
   const [mobileShowDetail, setMobileShowDetail] = useState(false)
+  // Mobile 3-Stufen-Navigation: Feeds -> Episodenliste (Detail via mobileShowDetail)
+  const [mobileStep, setMobileStep] = useState<'feeds' | 'list'>('list')
 
   const loadFeeds = useCallback(async () => {
     const data = await api.get<PodcastFeed[]>('/podcasts/feeds')
@@ -556,9 +558,9 @@ export default function PodcastsPage() {
 
       {/* Tab Content */}
       {tab === 'episodes' && (
-        <div className="flex gap-4" style={{ height: 'calc(100vh - 11rem)' }}>
+        <div className="flex gap-4 h-[calc(100dvh-12rem)] md:h-[calc(100vh-11rem)]">
           {/* Feed Sidebar */}
-          <div className={`${mobileShowDetail ? 'hidden md:block' : ''} flex-shrink-0 flex flex-col transition-all duration-200 ${feedSidebarOpen ? 'w-full md:w-64' : 'w-8'}`} style={{ height: 'calc(100vh - 11rem)' }}>
+          <div className={`${mobileStep === 'feeds' ? 'flex' : 'hidden'} md:flex flex-shrink-0 flex-col transition-all duration-200 h-[calc(100dvh-12rem)] md:h-[calc(100vh-11rem)] ${feedSidebarOpen ? 'w-full md:w-64' : 'w-8'}`}>
             {feedSidebarOpen ? (
             <div className="flex items-center justify-between mb-2 flex-shrink-0">
               <span className="text-sm font-medium text-muted-foreground">Feeds</span>
@@ -596,7 +598,7 @@ export default function PodcastsPage() {
 
             {/* All episodes */}
             <button
-              onClick={() => { setSelectedFeed(null); setSelectedEpisode(null); setMobileShowDetail(false) }}
+              onClick={() => { setSelectedFeed(null); setSelectedEpisode(null); setMobileShowDetail(false); setMobileStep('list') }}
               className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
                 !selectedFeed ? 'bg-primary/15 text-primary font-medium' : 'text-foreground/70 hover:bg-secondary'
               }`}
@@ -610,7 +612,7 @@ export default function PodcastsPage() {
                 className={`group px-3 py-2 rounded-md text-sm cursor-pointer transition-colors ${
                   selectedFeed === feed.id ? 'bg-primary/15 text-primary' : 'text-foreground/70 hover:bg-secondary'
                 } ${!feed.enabled ? 'opacity-50' : ''}`}
-                onClick={() => { setSelectedFeed(feed.id); setSelectedEpisode(null); setMobileShowDetail(false) }}
+                onClick={() => { setSelectedFeed(feed.id); setSelectedEpisode(null); setMobileShowDetail(false); setMobileStep('list') }}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   {/* Toggle switch */}
@@ -649,9 +651,14 @@ export default function PodcastsPage() {
           </div>
 
           {/* Episode List + Detail */}
-          <div className="flex-1 min-w-0 flex gap-4" style={{ height: 'calc(100vh - 11rem)' }}>
+          <div className={`${mobileStep === 'list' ? 'flex' : 'hidden'} md:flex flex-1 min-w-0 gap-4 h-[calc(100dvh-12rem)] md:h-[calc(100vh-11rem)]`}>
             {/* Episode List */}
-            <div className={`${mobileShowDetail ? 'hidden md:block' : ''} ${selectedEpisode ? 'md:w-1/2 lg:w-2/5' : 'w-full'} min-w-0 flex flex-col`} style={{ height: 'calc(100vh - 11rem)' }}>
+            <div className={`${mobileShowDetail ? 'hidden md:flex' : 'flex'} ${selectedEpisode ? 'md:w-1/2 lg:w-2/5' : 'w-full'} min-w-0 flex-col h-[calc(100dvh-12rem)] md:h-[calc(100vh-11rem)]`}>
+              {/* Mobile: zurück zu Feeds */}
+              <button onClick={() => setMobileStep('feeds')}
+                className="md:hidden flex items-center gap-1 text-sm text-primary pb-2 flex-shrink-0">
+                &larr; Feeds
+              </button>
               {/* Filter — fixed */}
               <div className="flex gap-1 pb-2 overflow-x-auto flex-shrink-0">
                 {(['all', 'saved', 'done', 'skipped', 'error'] as const).map(f => (
@@ -710,7 +717,7 @@ export default function PodcastsPage() {
               </div>
 
               {/* Scrollable episode list */}
-              <div className="overflow-y-auto overscroll-contain space-y-2" style={{ maxHeight: 'calc(100vh - 16rem)' }}>
+              <div className="overflow-y-auto overscroll-contain space-y-2 flex-1 min-h-0">
               {episodes.length === 0 ? (
                 <EmptyState icon={Headphones} title="Keine Episoden" description="Keine Episoden gefunden" />
               ) : (
@@ -768,7 +775,7 @@ export default function PodcastsPage() {
 
             {/* Episode Detail */}
             {selectedEpisode && (
-              <div ref={detailRef} className={`${mobileShowDetail ? '' : 'hidden md:block'} md:flex-1 min-w-0 bg-card rounded-lg border border-border p-4 overflow-y-auto overscroll-contain`} style={{ maxHeight: 'calc(100vh - 11rem)' }}>
+              <div ref={detailRef} className={`${mobileShowDetail ? '' : 'hidden md:block'} md:flex-1 min-w-0 bg-card rounded-lg border border-border p-4 overflow-y-auto overscroll-contain h-[calc(100dvh-12rem)] md:h-[calc(100vh-11rem)]`}>
                 {/* Mobile back */}
                 <button
                   onClick={() => { setMobileShowDetail(false); setSelectedEpisode(null) }}

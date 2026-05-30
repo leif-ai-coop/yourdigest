@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { api } from '../api/client'
 import { PageSpinner, Spinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
@@ -261,15 +261,11 @@ export default function DepotPage() {
 
   const totals = overview?.totals
   const positions = overview?.positions || []
-  const sortedPositions = useMemo(() => {
-    const arr = [...positions]
-    arr.sort((a, b) => {
-      const va = sortValue(a, sort.key), vb = sortValue(b, sort.key)
-      const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
-      return sort.dir === 'asc' ? cmp : -cmp
-    })
-    return arr
-  }, [positions, sort])
+  const sortedPositions = [...positions].sort((a, b) => {
+    const va = sortValue(a, sort.key), vb = sortValue(b, sort.key)
+    const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
   // Pro Kalendertag nur den letzten Snapshot (sonst erscheint "heute" mehrfach)
   const byDay = new Map<string, { t: string; v: number | null }>()
   for (const s of snapshots) {

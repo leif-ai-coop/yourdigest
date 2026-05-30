@@ -134,6 +134,9 @@ export default function DepotPage() {
   const [chartRange, setChartRange] = useState<string>(() => {
     try { return localStorage.getItem('depotChartRange') || '3M' } catch { return '3M' }
   })
+  const [yZoom, setYZoom] = useState<boolean>(() => {
+    try { return localStorage.getItem('depotChartYZoom') !== '0' } catch { return true }
+  })
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -143,6 +146,10 @@ export default function DepotPage() {
   useEffect(() => {
     try { localStorage.setItem('depotChartRange', chartRange) } catch { /* ignore */ }
   }, [chartRange])
+
+  useEffect(() => {
+    try { localStorage.setItem('depotChartYZoom', yZoom ? '1' : '0') } catch { /* ignore */ }
+  }, [yZoom])
 
   const toggleSort = (key: SortKey) =>
     setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' })
@@ -310,6 +317,14 @@ export default function DepotPage() {
   const rangeDays = RANGES.find(r => r.k === chartRange)?.d ?? 90
   const cutoff = rangeDays ? Date.now() - rangeDays * 86400000 : 0
   const chartData = allChart.filter(p => !cutoff || new Date(p.iso).getTime() >= cutoff)
+  // Y-Achsen-Zoom: Domain eng um die Datenwerte statt ab 0
+  const chartVals = chartData.map(p => p.v).filter((v): v is number => v != null)
+  const dMin = chartVals.length ? Math.min(...chartVals) : 0
+  const dMax = chartVals.length ? Math.max(...chartVals) : 0
+  const yPad = (dMax - dMin) * 0.08 || dMax * 0.02 || 1
+  const yFloor = Math.floor(dMin - yPad)
+  const yDomain: [number | string, number | string] = yZoom && chartVals.length ? [yFloor, Math.ceil(dMax + yPad)] : [0, 'auto']
+  const yBase = yZoom && chartVals.length ? yFloor : 0
   const dayUp = (totals?.day_change_value || 0) >= 0
 
   return (
@@ -401,13 +416,20 @@ export default function DepotPage() {
         <div className="bg-card border border-border rounded-xl p-4">
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="text-sm font-medium">Wertverlauf</div>
-            <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5">
-              {RANGES.map(r => (
-                <button key={r.k} onClick={() => setChartRange(r.k)}
-                  className={`px-2 py-0.5 text-xs rounded-md transition-colors ${chartRange === r.k ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-                  {r.k}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <button onClick={() => setYZoom(z => !z)}
+                title={yZoom ? 'Y-Achse: an Werte gezoomt (Klick: ab 0)' : 'Y-Achse: ab 0 (Klick: zoomen)'}
+                className={`px-2 py-0.5 text-xs rounded-md border transition-colors ${yZoom ? 'bg-card border-border text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+                {yZoom ? 'Y-Zoom' : 'ab 0'}
+              </button>
+              <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5">
+                {RANGES.map(r => (
+                  <button key={r.k} onClick={() => setChartRange(r.k)}
+                    className={`px-2 py-0.5 text-xs rounded-md transition-colors ${chartRange === r.k ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                    {r.k}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           {chartData.length > 1 ? (
@@ -422,11 +444,12 @@ export default function DepotPage() {
               <CartesianGrid stroke="hsl(222 40% 18%)" vertical={false} />
               <XAxis dataKey="t" stroke="hsl(215 20% 55%)" fontSize={11} tickLine={false} />
               <YAxis stroke="hsl(215 20% 55%)" fontSize={11} tickLine={false} width={50}
+                domain={yDomain} allowDataOverflow
                 tickFormatter={(v) => new Intl.NumberFormat('de-DE', { notation: 'compact' }).format(v)} />
               <Tooltip
                 contentStyle={{ background: 'hsl(222 44% 11%)', border: '1px solid hsl(222 40% 18%)', borderRadius: 8, fontSize: 12 }}
                 formatter={(v) => [fmtEur(Number(v), totals?.currency), 'Wert'] as [string, string]} />
-              <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#depotGrad)" />
+              <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#depotGrad)" baseValue={yBase} />
             </AreaChart>
           </ResponsiveContainer>
           ) : (

@@ -114,7 +114,8 @@ export default function LogsPage() {
           <EmptyState icon={ScrollText} title="No audit logs yet" description="Actions will be logged here." />
         ) : (
           <div className="bg-card rounded-lg border border-border overflow-x-auto">
-            <table className="w-full text-sm min-w-[600px]">
+            {/* Desktop: Tabelle */}
+            <table className="hidden md:table w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="px-4 py-2.5 text-left font-medium">Time</th>
@@ -134,6 +135,20 @@ export default function LogsPage() {
                 ))}
               </tbody>
             </table>
+            {/* Mobile: Karten */}
+            <div className="md:hidden divide-y divide-border/50">
+              {auditLogs.map(log => (
+                <div key={log.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium min-w-0 truncate">{log.action}</span>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.created_at)}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {log.entity_type} {log.entity_id ? `#${log.entity_id.slice(0, 8)}` : ''} · {log.user || 'system'}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )
       )}

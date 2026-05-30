@@ -820,7 +820,7 @@ export default function DigestsPage() {
         <div>
           <h2 className="text-sm font-medium mb-3">Recent Runs</h2>
           <div className="bg-card rounded-lg border border-border overflow-x-auto">
-            <table className="w-full text-sm min-w-[500px]">
+            <table className="hidden md:table w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="text-left px-4 py-2 font-medium">Policy</th>
@@ -865,6 +865,34 @@ export default function DigestsPage() {
                 })}
               </tbody>
             </table>
+            {/* Mobile: Karten */}
+            <div className="md:hidden divide-y divide-border/50">
+              {runs.slice(runsPage * RUNS_PER_PAGE, (runsPage + 1) * RUNS_PER_PAGE).map(run => {
+                const policy = policies.find(p => p.id === run.policy_id)
+                return (
+                  <div key={run.id} className="px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium min-w-0 truncate">{policy?.name || run.policy_id.slice(0, 8)}</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap ${
+                        run.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
+                        run.status === 'failed' ? 'bg-red-500/15 text-red-400' :
+                        run.status === 'running' ? 'bg-blue-500/15 text-blue-400' :
+                        'bg-secondary text-muted-foreground'
+                      }`}>{run.status}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <span className="text-xs text-muted-foreground">{run.item_count} Items · {formatDate(run.started_at)}</span>
+                      {run.status === 'completed' && (
+                        <button onClick={() => handlePreview(run.id)} className="flex items-center gap-1 text-xs text-primary">
+                          <Eye className="w-3 h-3" /> {previewId === run.id ? 'Hide' : 'Preview'}
+                        </button>
+                      )}
+                    </div>
+                    {run.error && <div className="text-xs text-red-400 mt-1">{run.error.slice(0, 80)}</div>}
+                  </div>
+                )
+              })}
+            </div>
             {runs.length > RUNS_PER_PAGE && (
               <div className="flex items-center justify-between px-4 py-2 border-t border-border">
                 <span className="text-xs text-muted-foreground">

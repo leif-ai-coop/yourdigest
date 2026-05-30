@@ -281,8 +281,16 @@ export default function SettingsPage() {
         <h1 className="text-xl font-semibold">Settings</h1>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-card rounded-lg p-1 w-fit overflow-x-auto max-w-full">
+      {/* Tabs — Mobile: Dropdown */}
+      <div className="sm:hidden mb-4">
+        <select value={tab} onChange={e => setTab(e.target.value as typeof tab)}
+          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary">
+          {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+        </select>
+      </div>
+
+      {/* Tabs — Desktop */}
+      <div className="hidden sm:flex gap-1 mb-6 bg-card rounded-lg p-1 w-fit overflow-x-auto max-w-full">
         {tabs.map(t => (
           <button
             key={t.key}
@@ -313,7 +321,7 @@ export default function SettingsPage() {
 
           {showAddAccount && (
             <form onSubmit={handleAddAccount} className="bg-card rounded-lg border border-border p-4 mb-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input placeholder="Email" value={accountForm.email} onChange={e => setAccountForm({...accountForm, email: e.target.value})}
                   className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
                 <input placeholder="Display Name" value={accountForm.display_name} onChange={e => setAccountForm({...accountForm, display_name: e.target.value})}
@@ -453,7 +461,7 @@ export default function SettingsPage() {
 
           {showAddRule && (
             <form onSubmit={handleAddRule} className="bg-card rounded-lg border border-border p-4 mb-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input placeholder="Rule Name" value={ruleForm.name} onChange={e => setRuleForm({...ruleForm, name: e.target.value})}
                   className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
                 <select value={ruleForm.category} onChange={e => setRuleForm({...ruleForm, category: e.target.value})}
@@ -534,7 +542,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input placeholder="Category name (e.g. work)" value={newCatKey}
                 onChange={e => setNewCatKey(e.target.value.toLowerCase().replace(/\s+/g, '_'))}
                 className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
@@ -567,7 +575,7 @@ export default function SettingsPage() {
             Controls how emails are displayed in digests. Full detail up to the first threshold, compact (sender + subject only) up to the second, counts only beyond.
           </p>
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground block mb-1">Full detail up to</label>
                 <input type="number" value={thresholds.detail_threshold}
@@ -614,7 +622,7 @@ export default function SettingsPage() {
 
             {showAddPolicy && (
               <form onSubmit={handleAddPolicy} className="bg-card rounded-lg border border-border p-4 mb-4">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input placeholder="Policy Name" value={policyForm.name} onChange={e => setPolicyForm({...policyForm, name: e.target.value})}
                     className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
                   <input placeholder="Target Email" type="email" value={policyForm.target_email} onChange={e => setPolicyForm({...policyForm, target_email: e.target.value})}
@@ -745,7 +753,7 @@ export default function SettingsPage() {
               setShowAddFeed(false)
               setFeedForm({ url: '', title: '' })
             }} className="bg-card rounded-lg border border-border p-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input placeholder="Feed URL" value={feedForm.url} onChange={e => setFeedForm({...feedForm, url: e.target.value})}
                   className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
                 <input placeholder="Title (optional — auto-detected)" value={feedForm.title} onChange={e => setFeedForm({...feedForm, title: e.target.value})}
@@ -906,7 +914,7 @@ export default function SettingsPage() {
                   setGeoQuery('')
                   setGeoResults([])
                 }}>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <input value={weatherForm.name} onChange={e => setWeatherForm({...weatherForm, name: e.target.value})}
                       className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
                     <input value={weatherForm.latitude} onChange={e => setWeatherForm({...weatherForm, latitude: e.target.value})}
@@ -1376,7 +1384,7 @@ export default function SettingsPage() {
             </div>
           )}
           <div className="bg-card rounded-lg border border-border p-4 space-y-4">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground block mb-1">Browse Days (default)</label>
                 <input type="number" min={1} max={90} value={assistantSettings.browse_days}

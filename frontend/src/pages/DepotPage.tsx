@@ -209,12 +209,17 @@ export default function DepotPage() {
 
   const totals = overview?.totals
   const positions = overview?.positions || []
-  const chartData = snapshots
-    .filter(s => s.total_value != null)
-    .map(s => ({
-      t: new Date(s.captured_at).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }),
+  // Pro Kalendertag nur den letzten Snapshot (sonst erscheint "heute" mehrfach)
+  const byDay = new Map<string, { t: string; v: number | null }>()
+  for (const s of snapshots) {
+    if (s.total_value == null) continue
+    const d = new Date(s.captured_at)
+    byDay.set(d.toISOString().slice(0, 10), {
+      t: d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }),
       v: s.total_value,
-    }))
+    })
+  }
+  const chartData = Array.from(byDay.values())
   const dayUp = (totals?.day_change_value || 0) >= 0
 
   return (
@@ -320,14 +325,20 @@ export default function DepotPage() {
                 <tr>
                   <th className="text-left font-medium px-3 py-2">Wertpapier</th>
                   <th className="text-right font-medium px-3 py-2">Stück</th>
-                  <th className="text-right font-medium px-3 py-2 hidden sm:table-cell">Kurs</th>
+                  <th className="text-right font-medium px-3 py-2 hidden sm:table-cell">Kaufkurs</th>
+                  <th className="text-right font-medium px-3 py-2 hidden md:table-cell">Kurs</th>
                   <th className="text-right font-medium px-3 py-2">Wert</th>
-                  <th className="text-right font-medium px-3 py-2 hidden md:table-cell">Δ Tag</th>
+                  <th className="text-right font-medium px-3 py-2">± seit Kauf</th>
+                  <th className="text-right font-medium px-3 py-2 hidden lg:table-cell">Δ Tag</th>
                   <th className="text-right font-medium px-3 py-2 w-16"></th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map(p => (
+                {positions.map(p => {
+                  const devPct = p.avg_buy_price && p.last_price ? (p.last_price - p.avg_buy_price) / p.avg_buy_price * 100 : null
+                  const devAbs = p.avg_buy_price != null && p.last_price != null && p.quantity != null
+                    ? (p.last_price - p.avg_buy_price) * p.quantity : null
+                  return (
                   <tr key={p.id} className="border-b border-border/50 last:border-0">
                     <td className="px-3 py-2 min-w-0">
                       <div className="font-medium truncate max-w-[40vw] md:max-w-xs">{p.name}</div>
@@ -336,9 +347,14 @@ export default function DepotPage() {
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtNum(p.quantity, p.quantity % 1 === 0 ? 0 : 4)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums hidden sm:table-cell">{fmtEur(p.last_price, p.currency)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums hidden sm:table-cell text-muted-foreground">{fmtEur(p.avg_buy_price, p.currency)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">{fmtEur(p.last_price, p.currency)}</td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtEur(p.last_value, p.currency)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums hidden md:table-cell ${(p.day_change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${(devPct || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      <div>{fmtPct(devPct)}</div>
+                      {devAbs != null && <div className="text-xs opacity-80">{devAbs > 0 ? '+' : ''}{fmtEur(devAbs, p.currency)}</div>}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums hidden lg:table-cell ${(p.day_change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                       {fmtPct(p.day_change_pct)}
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -346,7 +362,7 @@ export default function DepotPage() {
                       <button onClick={() => deletePos(p.id)} className="text-muted-foreground hover:text-red-400 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>

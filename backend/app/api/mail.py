@@ -210,7 +210,7 @@ async def list_messages(
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(MailMessage).order_by(desc(MailMessage.date))
+    query = select(MailMessage).order_by(desc(MailMessage.date), desc(MailMessage.id))
     if account_id:
         query = query.where(MailMessage.account_id == account_id)
     if folder:

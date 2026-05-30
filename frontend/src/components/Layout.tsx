@@ -56,6 +56,8 @@ const navItems = [
 export default function Layout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Full-Bleed-Routen (eigene Zwei-Spalten-Layouts, volle Hoehe, kein Padding)
+  const fullBleed = location.pathname === '/' || location.pathname === '/assistant'
 
 
   return (
@@ -117,7 +119,7 @@ export default function Layout() {
 
       {/* Main Content */}
       <main className={`${sidebarOpen ? 'md:ml-44' : 'md:ml-0'} flex-1 flex flex-col transition-all duration-200 h-full md:h-auto md:min-h-screen w-full max-w-full overflow-hidden`}>
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-14 md:pb-6">
+        <div className={`flex-1 overflow-x-hidden ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto p-3 md:p-6 pb-14 md:pb-6'}`}>
           <Outlet />
         </div>
       </main>
@@ -130,11 +132,11 @@ export default function Layout() {
             <NavLink
               key={to}
               to={to}
-              className={`flex items-center justify-center p-2 transition-colors ${
+              className={`flex items-center justify-center px-1 py-2 flex-1 transition-colors ${
                 isActive ? 'text-primary' : 'text-muted-foreground'
               }`}
             >
-              <Icon className="w-6 h-6" />
+              <Icon className="w-5 h-5" />
             </NavLink>
           )
         })}

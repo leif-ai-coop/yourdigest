@@ -247,7 +247,7 @@ export default function AssistantPage() {
   if (loading) return <PageSpinner />
 
   return (
-    <div className="flex h-full md:h-[calc(100vh-48px)] -m-3 md:-m-6 min-w-0 w-[calc(100%+1.5rem)] md:w-[calc(100%+3rem)]">
+    <div className="flex h-[calc(100dvh-3rem)] md:h-screen min-w-0 w-full">
       {/* Conversation List — Desktop */}
       <div className="hidden md:flex w-72 border-r border-border flex-col bg-background">
         <ConversationList conversations={conversations} activeId={activeId}

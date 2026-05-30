@@ -285,7 +285,7 @@ export default function InboxPage() {
   if (loading) return <PageSpinner />
 
   return (
-    <div className="flex h-full md:h-[calc(100vh-48px)] -m-3 md:-m-6 min-w-0 w-[calc(100%+1.5rem)] md:w-[calc(100%+3rem)]">
+    <div className="flex h-[calc(100dvh-3rem)] md:h-screen min-w-0 w-full">
       {/* Mail List */}
       <div className={`${deepLinked && selected ? 'hidden' : selected ? 'hidden md:flex md:w-96' : 'flex-1'} border-r border-border flex flex-col bg-background min-w-0`}>
         {/* Folder Tabs */}

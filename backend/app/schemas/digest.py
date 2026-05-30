@@ -25,6 +25,11 @@ class DigestPolicyCreate(BaseModel):
     health_data_types: list[str] | None = None
     health_days: int = 7
     include_podcasts: bool = False
+    include_depot: bool = False
+    depot_ai_summary: bool = True
+    depot_prompt: str | None = Field(None, max_length=10000)
+    depot_top_n: int = 10
+    depot_days: int = 30
 
 
 class DigestPolicyUpdate(BaseModel):
@@ -49,6 +54,11 @@ class DigestPolicyUpdate(BaseModel):
     health_data_types: list[str] | None = None
     health_days: int | None = None
     include_podcasts: bool | None = None
+    include_depot: bool | None = None
+    depot_ai_summary: bool | None = None
+    depot_prompt: str | None = Field(None, max_length=10000)
+    depot_top_n: int | None = Field(None, ge=1, le=100)
+    depot_days: int | None = Field(None, ge=1, le=1825)
 
 
 class DigestPolicyResponse(BaseModel):
@@ -74,6 +84,11 @@ class DigestPolicyResponse(BaseModel):
     health_data_types: list[str] | None
     health_days: int
     include_podcasts: bool
+    include_depot: bool
+    depot_ai_summary: bool
+    depot_prompt: str | None
+    depot_top_n: int
+    depot_days: int
     created_at: datetime
     updated_at: datetime
 

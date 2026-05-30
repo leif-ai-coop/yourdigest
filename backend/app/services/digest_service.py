@@ -1254,6 +1254,186 @@ async def generate_health_summary(
         return None
 
 
+DEFAULT_DEPOT_PROMPT = (
+    "Du bist ein nuechterner Finanz-Assistent. Fasse den aktuellen Depotstand in 2-4 kurzen "
+    "Saetzen auf Deutsch zusammen: Gesamtwert, Tagestendenz und auffaellige Gewinner/Verlierer "
+    "des Tages. Keine Anlageberatung und keine Empfehlungen, nur sachliche Beobachtung."
+)
+
+
+def _eur_de(v: float | None, cur: str = "EUR") -> str:
+    if v is None:
+        return "–"
+    s = f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"{s} {cur}"
+
+
+def _pct_de(v: float | None) -> str:
+    if v is None:
+        return "–"
+    return f"{'+' if v > 0 else ''}{v:.2f}".replace(".", ",") + " %"
+
+
+async def collect_depot_data(db: AsyncSession, days: int = 30) -> dict | None:
+    """Aktueller Depotstand + Positionen + Wertverlauf der letzten `days` Tage."""
+    from app.services import depot_service as _ds
+    from app.models.depot import DepotPosition, DepotSnapshot
+
+    totals = await _ds.compute_totals(db)
+    if not totals or totals.get("position_count", 0) == 0:
+        return None
+    positions = (await db.execute(
+        select(DepotPosition)
+        .where(DepotPosition.is_active == True)  # noqa: E712
+        .order_by(desc(DepotPosition.last_value))
+    )).scalars().all()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    snaps = (await db.execute(
+        select(DepotSnapshot)
+        .where(DepotSnapshot.captured_at >= cutoff)
+        .order_by(DepotSnapshot.captured_at)
+    )).scalars().all()
+    by_day: dict[str, float] = {}
+    for s in snaps:
+        if s.total_value is not None:
+            by_day[s.captured_at.date().isoformat()] = float(s.total_value)
+    history = [{"date": k, "value": v} for k, v in sorted(by_day.items())]
+    return {
+        "totals": totals,
+        "positions": [{
+            "name": p.name,
+            "isin": p.isin,
+            "last_value": float(p.last_value) if p.last_value is not None else None,
+            "last_price": float(p.last_price) if p.last_price is not None else None,
+            "avg_buy_price": float(p.avg_buy_price) if p.avg_buy_price is not None else None,
+            "day_change_pct": float(p.day_change_pct) if p.day_change_pct is not None else None,
+        } for p in positions],
+        "history": history,
+    }
+
+
+async def generate_depot_summary(db: AsyncSession, data: dict, custom_prompt: str | None = None) -> str | None:
+    try:
+        provider = get_llm_provider()
+        t = data["totals"]
+        lines = [
+            f"Gesamtwert: {t.get('total_value')} EUR. Tagesveraenderung: {t.get('day_change_value')} EUR. "
+            f"Gewinn/Verlust gesamt: {t.get('total_gain')} EUR ({t.get('total_gain_pct')}%)."
+        ]
+        for p in data["positions"][:25]:
+            lines.append(f"- {p['name']}: Wert {p['last_value']} EUR, Tag {p['day_change_pct']}%")
+        result = await provider.chat_and_log(
+            db, "depot_summary",
+            messages=[
+                {"role": "system", "content": custom_prompt or DEFAULT_DEPOT_PROMPT},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            max_tokens=400,
+        )
+        return (result.get("content") or "").strip()
+    except Exception as e:
+        logger.error(f"Depot LLM summary failed: {e}")
+        return None
+
+
+def render_depot_section(data: dict, ai_summary: str | None = None, top_n: int = 10) -> str:
+    import html as html_mod
+    t = data["totals"]
+    cur = t.get("currency", "EUR")
+    dc = t.get("day_change_value") or 0
+    dc_color = "#22c55e" if dc >= 0 else "#ef4444"
+    gain = t.get("total_gain")
+    gain_color = "#22c55e" if (gain or 0) >= 0 else "#ef4444"
+
+    # KPI-Kopf
+    kpis = f"""
+      <table style="width:100%;border-collapse:collapse"><tr>
+        <td style="padding:4px 8px;vertical-align:top">
+          <div style="font-size:11px;color:#7a8ba8">Depotwert</div>
+          <div style="font-size:20px;font-weight:600;color:#e2e8f0">{_eur_de(t.get('total_value'), cur)}</div>
+        </td>
+        <td style="padding:4px 8px;vertical-align:top">
+          <div style="font-size:11px;color:#7a8ba8">Heute</div>
+          <div style="font-size:15px;font-weight:600;color:{dc_color}">{('+' if dc >= 0 else '')}{_eur_de(dc, cur)}</div>
+        </td>
+        <td style="padding:4px 8px;vertical-align:top">
+          <div style="font-size:11px;color:#7a8ba8">Gewinn/Verlust</div>
+          <div style="font-size:15px;font-weight:600;color:{gain_color}">{_eur_de(gain, cur)} ({_pct_de(t.get('total_gain_pct'))})</div>
+        </td>
+      </tr></table>"""
+
+    ai_html = ""
+    if ai_summary:
+        ai_html = (
+            f'<div style="font-size:13px;color:#d4dae4;line-height:1.6;margin:10px 8px;'
+            f'padding:10px 14px;background:#1a2540;border-left:3px solid #5b9cf6;border-radius:0 8px 8px 0">'
+            f'{_safe_llm_html(ai_summary)}</div>'
+        )
+
+    # Positions-Tabelle
+    positions = data["positions"]
+    rows = ""
+    for p in positions[:top_n]:
+        name = html_mod.escape((p["name"] or "")[:32])
+        d = p.get("day_change_pct")
+        d_color = "#22c55e" if (d or 0) >= 0 else "#ef4444"
+        rows += (
+            f'<tr>'
+            f'<td style="padding:5px 8px;font-size:12px;color:#e2e8f0;border-bottom:1px solid #1a2540">{name}</td>'
+            f'<td style="padding:5px 8px;font-size:12px;color:#d4dae4;text-align:right;border-bottom:1px solid #1a2540;white-space:nowrap">{_eur_de(p.get("last_value"), cur)}</td>'
+            f'<td style="padding:5px 8px;font-size:12px;color:{d_color};text-align:right;border-bottom:1px solid #1a2540;white-space:nowrap">{_pct_de(d)}</td>'
+            f'</tr>'
+        )
+    rest = positions[top_n:]
+    if rest:
+        rest_val = sum((p.get("last_value") or 0) for p in rest)
+        rows += (
+            f'<tr><td style="padding:5px 8px;font-size:12px;color:#7a8ba8;border-bottom:1px solid #1a2540">+ {len(rest)} weitere</td>'
+            f'<td style="padding:5px 8px;font-size:12px;color:#7a8ba8;text-align:right;border-bottom:1px solid #1a2540;white-space:nowrap">{_eur_de(rest_val, cur)}</td>'
+            f'<td style="border-bottom:1px solid #1a2540"></td></tr>'
+        )
+    table = f"""
+      <table style="width:100%;border-collapse:collapse;margin-top:8px">
+        <tr>
+          <th style="text-align:left;padding:4px 8px;font-size:11px;color:#7a8ba8;border-bottom:1px solid #1e2d4a">Position</th>
+          <th style="text-align:right;padding:4px 8px;font-size:11px;color:#7a8ba8;border-bottom:1px solid #1e2d4a">Wert</th>
+          <th style="text-align:right;padding:4px 8px;font-size:11px;color:#7a8ba8;border-bottom:1px solid #1e2d4a">Δ Tag</th>
+        </tr>
+        {rows}
+      </table>"""
+
+    # Mini-Wertverlauf (Balken, normalisiert fuer Sichtbarkeit)
+    chart = ""
+    history = data.get("history") or []
+    if len(history) >= 2:
+        vals = [h["value"] for h in history]
+        mn, mx = min(vals), max(vals)
+        span = (mx - mn) or 1
+        bar_rows = ""
+        for h in history[-20:]:
+            pct = (h["value"] - mn) / span * 100
+            bar_rows += (
+                f'<tr><td style="padding:2px 6px;color:#7a8ba8;font-size:10px;white-space:nowrap;width:46px">{_fmt_date_short(h["date"])}</td>'
+                f'{_bar_html(pct, "#6366f1", _eur_de(h["value"], cur))}</tr>'
+            )
+        chart = f"""
+      <div style="margin-top:14px;border-top:1px solid #1e2d4a;padding-top:10px">
+        <div style="font-size:11px;color:#7a8ba8;margin-bottom:4px">Wertverlauf ({len(history)} Tage)</div>
+        <table style="width:100%;border-collapse:collapse">{bar_rows}</table>
+      </div>"""
+
+    return f"""
+  <div style="background:#151d30;border:1px solid #1e2d4a;border-radius:10px;margin-bottom:16px;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid #1e2d4a"><h2>💼 Depot</h2></div>
+    <div style="padding:12px 14px">
+      {kpis}
+      {ai_html}
+      {table}
+      {chart}
+    </div>
+  </div>"""
+
+
 async def compose_digest(
     db: AsyncSession, policy: DigestPolicy, override_since: datetime | None = None
 ) -> DigestRun:
@@ -1338,6 +1518,14 @@ async def compose_digest(
         if policy.include_podcasts:
             podcast_episodes = await get_ready_episodes(db, since=since)
 
+        # Collect depot data
+        depot_data = None
+        depot_ai_summary = None
+        if getattr(policy, "include_depot", False):
+            depot_data = await collect_depot_data(db, days=policy.depot_days or 30)
+            if depot_data and policy.depot_ai_summary:
+                depot_ai_summary = await generate_depot_summary(db, depot_data, policy.depot_prompt)
+
         total_items = len(mail_items) + len(feed_items) + (1 if weather_data else 0) + (1 if health_data else 0) + len(podcast_episodes)
         run.item_count = total_items
 
@@ -1397,6 +1585,15 @@ async def compose_digest(
             ))
             order += 1
 
+        if depot_data:
+            db.add(DigestSection(
+                run_id=run.id, section_type="depot", title="Depot",
+                content=render_depot_section(depot_data, depot_ai_summary, policy.depot_top_n or 10),
+                order=order,
+                metadata_json={"total_value": depot_data["totals"].get("total_value")},
+            ))
+            order += 1
+
         # Build section blocks
         section_blocks = {
             "weather": render_weather_section(weather_data, weather_ai_summary) if weather_data else "",
@@ -1406,6 +1603,7 @@ async def compose_digest(
             "feeds": render_feed_section(feed_items) if feed_items else "",
             "unsubscribe": render_unsubscribe_section(mail_items),
             "podcasts": render_podcast_digest_section(podcast_episodes) if podcast_episodes else "",
+            "depot": render_depot_section(depot_data, depot_ai_summary, policy.depot_top_n or 10) if depot_data else "",
         }
         if ai_summary:
             section_blocks["ai_overview"] = f"""
@@ -1418,7 +1616,7 @@ async def compose_digest(
 
         # Determine section order from policy
         import json as _json
-        default_order = ["weather", "health", "ai_overview", "mail", "podcasts", "feeds", "unsubscribe"]
+        default_order = ["weather", "health", "depot", "ai_overview", "mail", "podcasts", "feeds", "unsubscribe"]
         try:
             order_list = _json.loads(policy.section_order) if policy.section_order else default_order
         except (ValueError, TypeError):

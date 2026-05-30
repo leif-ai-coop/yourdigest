@@ -5,7 +5,7 @@ import { PageSpinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
 import {
   FileText, Plus, Trash2, Check, X, Play, Eye, Clock,
-  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown, Heart, Headphones
+  Mail, Rss, CloudSun, Sparkles, Settings, ArrowUp, ArrowDown, Heart, Headphones, Wallet
 } from 'lucide-react'
 
 interface HealthOption {
@@ -36,6 +36,11 @@ interface DigestPolicy {
   health_prompt: string | null
   health_data_types: string[] | null
   health_days: number
+  include_depot: boolean
+  depot_ai_summary: boolean
+  depot_prompt: string | null
+  depot_top_n: number
+  depot_days: number
   created_at: string
 }
 
@@ -190,14 +195,20 @@ export default function DigestsPage() {
   const [healthDataTypeOptions, setHealthDataTypeOptions] = useState<HealthOption[]>([])
   const [editHealthDays, setEditHealthDays] = useState(7)
   const [editPodcasts, setEditPodcasts] = useState(false)
+  const [editDepot, setEditDepot] = useState(false)
+  const [editDepotAi, setEditDepotAi] = useState(true)
+  const [editDepotPrompt, setEditDepotPrompt] = useState('')
+  const [editDepotTopN, setEditDepotTopN] = useState(10)
+  const [editDepotDays, setEditDepotDays] = useState(30)
 
-  const defaultSectionOrder = ['weather', 'health', 'ai_overview', 'mail', 'podcasts', 'feeds', 'unsubscribe']
+  const defaultSectionOrder = ['weather', 'health', 'depot', 'ai_overview', 'mail', 'podcasts', 'feeds', 'unsubscribe']
   const sectionLabels: Record<string, string> = {
     weather: 'Weather',
     health: 'Health',
     ai_overview: 'AI Overview',
     mail: 'Emails',
     podcasts: 'Podcasts',
+    depot: 'Depot',
     feeds: 'RSS Feeds',
     unsubscribe: 'Unsubscribe Links',
   }
@@ -433,6 +444,7 @@ export default function DigestsPage() {
                       {policy.include_weather && <CloudSun className="w-3 h-3" />}
                       {policy.include_feeds && <Rss className="w-3 h-3" />}
                       {policy.include_podcasts && <Headphones className="w-3 h-3" />}
+                      {policy.include_depot && <Wallet className="w-3 h-3" />}
                       {policy.since_last_any_digest && <span className="text-xs text-primary" title="Since last any digest">cross</span>}
                     </div>
                     {policy.include_categories && (
@@ -471,6 +483,11 @@ export default function DigestsPage() {
                           setEditHealthPrompt(policy.health_prompt || '')
                           setEditHealthDataTypes(policy.health_data_types || [])
                           setEditHealthDays(policy.health_days || 7)
+                          setEditDepot(policy.include_depot || false)
+                          setEditDepotAi(policy.depot_ai_summary ?? true)
+                          setEditDepotPrompt(policy.depot_prompt || '')
+                          setEditDepotTopN(policy.depot_top_n || 10)
+                          setEditDepotDays(policy.depot_days || 30)
                           try {
                             const stored = policy.section_order ? JSON.parse(policy.section_order) as string[] : defaultSectionOrder
                             // Merge: append any new default keys not in stored order
@@ -574,6 +591,11 @@ export default function DigestsPage() {
                           <input type="checkbox" checked={editPodcasts}
                             onChange={e => { setEditPodcasts(e.target.checked); toggleSection('podcasts', e.target.checked) }} className="rounded" />
                           Podcasts
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input type="checkbox" checked={editDepot}
+                            onChange={e => { setEditDepot(e.target.checked); toggleSection('depot', e.target.checked) }} className="rounded" />
+                          <Wallet className="w-3.5 h-3.5" /> Depot
                         </label>
                         <label className="flex items-center gap-2 text-sm text-muted-foreground">
                           <input type="checkbox" checked={editSectionOrder.includes('unsubscribe')}
@@ -713,6 +735,40 @@ export default function DigestsPage() {
                       </div>
                     )}
 
+                    {editDepot && (
+                      <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-3">
+                        <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                          <Wallet className="w-3.5 h-3.5" /> Depot-Einstellungen
+                        </div>
+                        <div className="flex flex-wrap items-center gap-4">
+                          <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                            Top-Positionen
+                            <input type="number" min={1} max={100} value={editDepotTopN}
+                              onChange={e => setEditDepotTopN(parseInt(e.target.value) || 10)}
+                              className="w-20 bg-secondary border border-border rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+                          </label>
+                          <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                            Verlauf (Tage)
+                            <input type="number" min={1} max={1825} value={editDepotDays}
+                              onChange={e => setEditDepotDays(parseInt(e.target.value) || 30)}
+                              className="w-20 bg-secondary border border-border rounded-md px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+                          </label>
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <input type="checkbox" checked={editDepotAi} onChange={e => setEditDepotAi(e.target.checked)} className="rounded" />
+                            AI-Kommentar
+                          </label>
+                        </div>
+                        {editDepotAi && (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">Depot-Prompt (leer = Standard)</label>
+                            <textarea rows={2} value={editDepotPrompt} onChange={e => setEditDepotPrompt(e.target.value)}
+                              placeholder="z.B. Fasse den Depotstand kurz und sachlich zusammen."
+                              className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Save / Cancel */}
                     <div className="flex items-center gap-2">
                       <button
@@ -733,6 +789,11 @@ export default function DigestsPage() {
                             health_prompt: editHealthPrompt || null,
                             health_data_types: editHealthDataTypes.length > 0 ? editHealthDataTypes : null,
                             health_days: editHealthDays,
+                            include_depot: editDepot,
+                            depot_ai_summary: editDepotAi,
+                            depot_prompt: editDepotPrompt || null,
+                            depot_top_n: editDepotTopN,
+                            depot_days: editDepotDays,
                           })
                           setPolicies(prev => prev.map(p => p.id === policy.id ? updated : p))
                           setEditingSettings(null)

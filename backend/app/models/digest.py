@@ -31,6 +31,11 @@ class DigestPolicy(Base, UUIDMixin, TimestampMixin):
     health_data_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     health_days: Mapped[int] = mapped_column(Integer, default=7)
     include_podcasts: Mapped[bool] = mapped_column(default=False)
+    include_depot: Mapped[bool] = mapped_column(default=False)
+    depot_ai_summary: Mapped[bool] = mapped_column(default=True)
+    depot_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    depot_top_n: Mapped[int] = mapped_column(Integer, default=10)
+    depot_days: Mapped[int] = mapped_column(Integer, default=30)
 
 
 class DigestRun(Base, UUIDMixin, TimestampMixin):

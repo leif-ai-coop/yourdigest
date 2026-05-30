@@ -180,6 +180,17 @@ def parse_ing_depot_html(html_src: str) -> list[ParsedPosition]:
     return positions
 
 
+def _name_tokens(name: str | None) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", _norm_name(name)))
+
+
+def _token_overlap(a: str | None, b: str | None) -> float:
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
 def _match(parsed: ParsedPosition, existing: list[DepotPosition]) -> DepotPosition | None:
     if parsed.isin:
         for p in existing:
@@ -194,6 +205,14 @@ def _match(parsed: ParsedPosition, existing: list[DepotPosition]) -> DepotPositi
         for p in existing:
             if _norm_name(p.name) == pname:
                 return p
+        # Fuzzy-Fallback: hohe Token-Ueberlappung (OCR vs. Quelltext-Schreibweise)
+        best, best_ov = None, 0.0
+        for p in existing:
+            ov = _token_overlap(parsed.name, p.name)
+            if ov > best_ov:
+                best, best_ov = p, ov
+        if best is not None and best_ov >= 0.6:
+            return best
     return None
 
 
@@ -225,8 +244,16 @@ async def build_preview(db: AsyncSession, positions: list[ParsedPosition]) -> li
 
 
 async def apply_positions(
-    db: AsyncSession, positions: list[ParsedPosition], replace_missing: bool = False
+    db: AsyncSession, positions: list[ParsedPosition], replace_missing: bool = False,
+    import_source: str = "screenshot",
 ) -> dict:
+    """Uebernimmt Positionen mit deterministischer Quellen-Priorität.
+
+    'quelltext' ist massgeblich fuer Identitaet/Einstandskurs/Name (es ist
+    exakt, nicht OCR). Eine spaetere Screenshot-Uebernahme ueberschreibt diese
+    Felder nicht mehr. Stueck/Kurs/Wert: jeweils der neueste Import gewinnt.
+    """
+    incoming_auth = import_source == "quelltext"
     existing = (await db.execute(select(DepotPosition))).scalars().all()
     active = [p for p in existing if p.is_active]
     seen_ids: set = set()
@@ -240,18 +267,26 @@ async def apply_positions(
         if value is None and parsed.quantity is not None and parsed.last_price is not None:
             value = float(parsed.quantity) * float(parsed.last_price)
         if m is None:
-            m = DepotPosition(name=parsed.name or parsed.isin or "Unbenannt", source="screenshot")
+            m = DepotPosition(name=parsed.name or parsed.isin or "Unbenannt", source=import_source)
             db.add(m)
+            active.append(m)
             created += 1
         else:
             updated += 1
-        m.name = parsed.name or m.name
-        m.isin = parsed.isin or m.isin
-        m.wkn = parsed.wkn or m.wkn
+        existing_auth = (m.source == "quelltext")
+
+        # Name/ISIN/WKN/Einstandskurs: massgebliche Quelle gewinnt, sonst nur Luecken fuellen
+        if parsed.name and (incoming_auth or not existing_auth or not m.name):
+            m.name = parsed.name
+        if parsed.isin and (incoming_auth or not m.isin):
+            m.isin = parsed.isin
+        if parsed.wkn and (incoming_auth or not m.wkn):
+            m.wkn = parsed.wkn
+        if parsed.avg_buy_price is not None and (incoming_auth or m.avg_buy_price is None):
+            m.avg_buy_price = parsed.avg_buy_price
+        # Stueck/Kurs/Wert/Performance: neuester Import gewinnt
         if parsed.quantity is not None:
             m.quantity = parsed.quantity
-        if parsed.avg_buy_price is not None:
-            m.avg_buy_price = parsed.avg_buy_price
         if parsed.currency:
             m.currency = parsed.currency
         if parsed.last_price is not None:
@@ -265,7 +300,9 @@ async def apply_positions(
         m.last_price_at = datetime.now(timezone.utc)
         m.price_stale = False
         m.is_active = True
-        m.source = "screenshot"
+        # Provenienz: 'quelltext' bleibt klebrig, damit es nicht von Screenshots verdraengt wird
+        if incoming_auth or not existing_auth:
+            m.source = import_source
         await db.flush()
         seen_ids.add(m.id)
 
@@ -274,9 +311,114 @@ async def apply_positions(
             if p.id not in seen_ids:
                 p.is_active = False
 
+    # Nach jedem Import automatisch ueber ISIN konsolidieren (sichere Schluessel)
+    await _dedupe_by_isin(db)
     await db.flush()
-    await _create_snapshot(db, source="screenshot")
+    await _create_snapshot(db, source=import_source)
     return {"created": created, "updated": updated}
+
+
+def _merge_into(primary: DepotPosition, other: DepotPosition) -> None:
+    """Fehlende Felder von `other` in `primary` uebernehmen (primary gewinnt)."""
+    primary.isin = primary.isin or other.isin
+    primary.wkn = primary.wkn or other.wkn
+    if not primary.name:
+        primary.name = other.name
+    if primary.avg_buy_price is None:
+        primary.avg_buy_price = other.avg_buy_price
+    if primary.quantity in (None, 0):
+        primary.quantity = other.quantity
+    if primary.last_price is None:
+        primary.last_price = other.last_price
+    if primary.last_value is None:
+        primary.last_value = other.last_value
+    if primary.market_symbol is None:
+        primary.market_symbol = other.market_symbol
+    if primary.source != "quelltext" and other.source == "quelltext":
+        primary.source = "quelltext"
+
+
+def _pick_primary(group: list[DepotPosition]) -> DepotPosition:
+    # Bevorzuge: hat ISIN > hat Einstandskurs > hat Kurs > Quelltext-Quelle
+    return sorted(group, key=lambda p: (
+        p.isin is not None, p.avg_buy_price is not None,
+        p.last_price is not None, p.source == "quelltext",
+    ), reverse=True)[0]
+
+
+def _group_by_isin(positions: list[DepotPosition]) -> list[list[DepotPosition]]:
+    groups: dict[str, list[DepotPosition]] = {}
+    for p in positions:
+        if p.isin:
+            groups.setdefault(p.isin.upper(), []).append(p)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _same_security(a: DepotPosition, b: DepotPosition) -> bool:
+    # Zwei verschiedene ISINs sind NIE dieselbe Position
+    if a.isin and b.isin:
+        return a.isin.upper() == b.isin.upper()
+    # Mindestens eine ohne ISIN -> ueber Namen vergleichen
+    na, nb = _norm_name(a.name), _norm_name(b.name)
+    if na and na == nb:
+        return True
+    return _token_overlap(a.name, b.name) >= 0.6
+
+
+def _group_fuzzy(positions: list[DepotPosition]) -> list[list[DepotPosition]]:
+    """Greedy-Gruppierung: ISIN-Gleichheit ODER Namens-/Fuzzy-Match.
+    Eine Position ohne ISIN kann so zu einer ISIN-Position gezogen werden."""
+    groups: list[list[DepotPosition]] = []
+    for p in positions:
+        for g in groups:
+            if any(_same_security(p, q) for q in g):
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    return [g for g in groups if len(g) > 1]
+
+
+async def _dedupe_by_isin(db: AsyncSession) -> int:
+    """Sichere Auto-Konsolidierung: nur Positionen mit identischer ISIN."""
+    active = (await db.execute(
+        select(DepotPosition).where(DepotPosition.is_active == True)  # noqa: E712
+    )).scalars().all()
+    merged = 0
+    for group in _group_by_isin(active):
+        primary = _pick_primary(group)
+        for other in group:
+            if other.id != primary.id:
+                _merge_into(primary, other)
+                await db.delete(other)
+                merged += 1
+    if merged:
+        await db.flush()
+    return merged
+
+
+async def find_duplicate_groups(db: AsyncSession) -> list[list[DepotPosition]]:
+    active = (await db.execute(
+        select(DepotPosition).where(DepotPosition.is_active == True)  # noqa: E712
+    )).scalars().all()
+    return _group_fuzzy(active)
+
+
+async def dedupe_positions(db: AsyncSession) -> dict:
+    """Konsolidiert Duplikate ueber ISIN UND normalisierten Namen."""
+    groups = await find_duplicate_groups(db)
+    merged = 0
+    for group in groups:
+        primary = _pick_primary(group)
+        for other in group:
+            if other.id != primary.id:
+                _merge_into(primary, other)
+                await db.delete(other)
+                merged += 1
+    if merged:
+        await db.flush()
+        await _create_snapshot(db, source="dedupe")
+    return {"groups": len(groups), "merged": merged}
 
 
 async def refresh_prices(db: AsyncSession) -> dict:

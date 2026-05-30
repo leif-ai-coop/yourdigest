@@ -121,6 +121,9 @@ export default function DepotPage() {
   const [showHtml, setShowHtml] = useState(false)
   const [htmlText, setHtmlText] = useState('')
   const [backfilling, setBackfilling] = useState(false)
+  const [deduping, setDeduping] = useState(false)
+  const [dupCount, setDupCount] = useState(0)
+  const [previewSource, setPreviewSource] = useState<'screenshot' | 'quelltext'>('screenshot')
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>(() => {
     try {
       const s = localStorage.getItem('depotSort')
@@ -128,23 +131,32 @@ export default function DepotPage() {
     } catch { /* ignore */ }
     return { key: 'last_value', dir: 'desc' }
   })
+  const [chartRange, setChartRange] = useState<string>(() => {
+    try { return localStorage.getItem('depotChartRange') || '3M' } catch { return '3M' }
+  })
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     try { localStorage.setItem('depotSort', JSON.stringify(sort)) } catch { /* ignore */ }
   }, [sort])
 
+  useEffect(() => {
+    try { localStorage.setItem('depotChartRange', chartRange) } catch { /* ignore */ }
+  }, [chartRange])
+
   const toggleSort = (key: SortKey) =>
     setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' })
 
   const load = useCallback(async () => {
     try {
-      const [ov, snaps] = await Promise.all([
+      const [ov, snaps, dups] = await Promise.all([
         api.get<Overview>('/depot/positions'),
-        api.get<Snapshot[]>('/depot/snapshots?limit=120'),
+        api.get<Snapshot[]>('/depot/snapshots?limit=1500'),
+        api.get<{ count: number }>('/depot/duplicates'),
       ])
       setOverview(ov)
       setSnapshots(snaps)
+      setDupCount(dups.count)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Fehler beim Laden')
     } finally {
@@ -157,6 +169,7 @@ export default function DepotPage() {
   const handleImage = useCallback(async (dataUrl: string) => {
     setError(null)
     setOcrLoading(true)
+    setPreviewSource('screenshot')
     try {
       const result = await api.post<Preview>('/depot/import-screenshot', { image: dataUrl })
       setPreview(result)
@@ -193,7 +206,7 @@ export default function DepotPage() {
     if (!positions.length) { setPreview(null); return }
     setOcrLoading(true)
     try {
-      const ov = await api.post<Overview>('/depot/apply-import', { positions, replace_missing: replaceMissing })
+      const ov = await api.post<Overview>('/depot/apply-import', { positions, replace_missing: replaceMissing, source: previewSource })
       setOverview(ov)
       setPreview(null)
       setReplaceMissing(false)
@@ -209,6 +222,7 @@ export default function DepotPage() {
     if (!htmlText.trim()) return
     setError(null)
     setOcrLoading(true)
+    setPreviewSource('quelltext')
     try {
       const result = await api.post<Preview>('/depot/import-html', { html: htmlText })
       setPreview(result)
@@ -251,6 +265,19 @@ export default function DepotPage() {
     }
   }
 
+  const runDedupe = async () => {
+    setDeduping(true)
+    setError(null)
+    try {
+      await api.post('/depot/dedupe', {})
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Zusammenführen fehlgeschlagen')
+    } finally {
+      setDeduping(false)
+    }
+  }
+
   const deletePos = async (id: string) => {
     if (!confirm('Position wirklich loeschen?')) return
     await api.delete(`/depot/positions/${id}`)
@@ -267,16 +294,22 @@ export default function DepotPage() {
     return sort.dir === 'asc' ? cmp : -cmp
   })
   // Pro Kalendertag nur den letzten Snapshot (sonst erscheint "heute" mehrfach)
-  const byDay = new Map<string, { t: string; v: number | null }>()
+  const byDay = new Map<string, { iso: string; t: string; v: number | null }>()
   for (const s of snapshots) {
     if (s.total_value == null) continue
     const d = new Date(s.captured_at)
-    byDay.set(d.toISOString().slice(0, 10), {
+    const iso = d.toISOString().slice(0, 10)
+    byDay.set(iso, {
+      iso,
       t: d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }),
       v: s.total_value,
     })
   }
-  const chartData = Array.from(byDay.values())
+  const allChart = Array.from(byDay.values()).sort((a, b) => a.iso.localeCompare(b.iso))
+  const RANGES = [{ k: '1M', d: 30 }, { k: '3M', d: 90 }, { k: '6M', d: 180 }, { k: '1J', d: 365 }, { k: 'Max', d: 0 }]
+  const rangeDays = RANGES.find(r => r.k === chartRange)?.d ?? 90
+  const cutoff = rangeDays ? Date.now() - rangeDays * 86400000 : 0
+  const chartData = allChart.filter(p => !cutoff || new Date(p.iso).getTime() >= cutoff)
   const dayUp = (totals?.day_change_value || 0) >= 0
 
   return (
@@ -318,6 +351,19 @@ export default function DepotPage() {
         </div>
       )}
 
+      {dupCount > 0 && (
+        <div className="flex items-center justify-between gap-2 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+          <span className="min-w-0 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            {dupCount} mögliche {dupCount === 1 ? 'Dublette' : 'Dubletten'} erkannt.
+          </span>
+          <button onClick={runDedupe} disabled={deduping}
+            className="shrink-0 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50">
+            {deduping ? 'Führe zusammen…' : 'Zusammenführen'}
+          </button>
+        </div>
+      )}
+
       {/* Hero */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-card border border-border rounded-xl p-4 col-span-2">
@@ -351,9 +397,20 @@ export default function DepotPage() {
       )}
 
       {/* Chart */}
-      {chartData.length > 1 && (
+      {allChart.length > 1 && (
         <div className="bg-card border border-border rounded-xl p-4">
-          <div className="text-sm font-medium mb-3">Wertverlauf</div>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="text-sm font-medium">Wertverlauf</div>
+            <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5">
+              {RANGES.map(r => (
+                <button key={r.k} onClick={() => setChartRange(r.k)}
+                  className={`px-2 py-0.5 text-xs rounded-md transition-colors ${chartRange === r.k ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                  {r.k}
+                </button>
+              ))}
+            </div>
+          </div>
+          {chartData.length > 1 ? (
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
               <defs>
@@ -372,6 +429,11 @@ export default function DepotPage() {
               <Area type="monotone" dataKey="v" stroke="#6366f1" strokeWidth={2} fill="url(#depotGrad)" />
             </AreaChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground text-center px-4">
+              Für diesen Zeitraum liegen zu wenig Datenpunkte vor. Wähle einen größeren Zeitraum oder lade den Verlauf.
+            </div>
+          )}
         </div>
       )}
 

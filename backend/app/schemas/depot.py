@@ -116,3 +116,15 @@ class ApplyRequest(BaseModel):
     replace_missing: bool = Field(
         False, description="Positionen, die im Screenshot fehlen, deaktivieren"
     )
+    source: str = Field("screenshot", max_length=20, description="screenshot|quelltext|manual")
+
+
+class DuplicateGroupOut(BaseModel):
+    key: str
+    ids: list[uuid.UUID]
+    names: list[str]
+
+
+class DuplicatesOut(BaseModel):
+    count: int
+    groups: list[DuplicateGroupOut]

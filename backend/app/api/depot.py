@@ -12,6 +12,7 @@ from app.schemas.depot import (
     DepotPositionCreate, DepotPositionUpdate, DepotPositionOut,
     DepotOverview, DepotTotals, DepotSnapshotOut,
     ImportRequest, ImportHtmlRequest, ImportPreview, ImportPreviewItem, ApplyRequest,
+    DuplicatesOut, DuplicateGroupOut,
 )
 from app.exceptions import NotFoundError
 from app.services import depot_service
@@ -105,7 +106,29 @@ async def import_html(data: ImportHtmlRequest, db: AsyncSession = Depends(get_db
 
 @router.post("/apply-import", response_model=DepotOverview)
 async def apply_import(data: ApplyRequest, db: AsyncSession = Depends(get_db)):
-    await depot_service.apply_positions(db, data.positions, replace_missing=data.replace_missing)
+    await depot_service.apply_positions(
+        db, data.positions, replace_missing=data.replace_missing, import_source=data.source
+    )
+    return await overview(db)
+
+
+@router.get("/duplicates", response_model=DuplicatesOut)
+async def list_duplicates(db: AsyncSession = Depends(get_db)):
+    groups = await depot_service.find_duplicate_groups(db)
+    out = [
+        DuplicateGroupOut(
+            key=(g[0].isin or g[0].name or "")[:40],
+            ids=[p.id for p in g],
+            names=[p.name for p in g],
+        )
+        for g in groups
+    ]
+    return DuplicatesOut(count=len(out), groups=out)
+
+
+@router.post("/dedupe", response_model=DepotOverview)
+async def dedupe(db: AsyncSession = Depends(get_db)):
+    await depot_service.dedupe_positions(db)
     return await overview(db)
 
 
@@ -124,7 +147,7 @@ async def backfill_history(days: int = Query(90, ge=7, le=1825), db: AsyncSessio
 
 @router.get("/snapshots", response_model=list[DepotSnapshotOut])
 async def list_snapshots(
-    limit: int = Query(90, ge=1, le=365),
+    limit: int = Query(400, ge=1, le=3000),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(

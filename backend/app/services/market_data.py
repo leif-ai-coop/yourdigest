@@ -86,5 +86,22 @@ async def get_price_by_isin(client: httpx.AsyncClient, isin: str, cached_symbol:
     return quote
 
 
+async def fetch_fx_rate(client: httpx.AsyncClient, currency: str) -> float | None:
+    """Wechselkurs: wie viele EUR ist 1 Einheit von `currency` wert.
+
+    Behandelt GBp/GBX (Pence) als GBP/100. EUR -> 1.0.
+    """
+    cur = (currency or "").upper()
+    if cur in ("EUR", ""):
+        return 1.0
+    pence = cur in ("GBP", "GBX", "GBPENCE") or currency == "GBp"
+    base = "GBP" if pence else cur
+    quote = await fetch_quote(client, f"{base}EUR=X")
+    if not quote or not quote.get("price"):
+        return None
+    rate = quote["price"]
+    return rate / 100 if pence else rate
+
+
 def new_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=15, headers=_HEADERS, follow_redirects=True)

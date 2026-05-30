@@ -60,6 +60,17 @@ def _clean_security_name(name: str | None) -> str:
     return n
 
 
+def _clean_security_name_aggressive(name: str | None) -> str:
+    """Staerkere Bereinigung fuer den Namens-Fallback: entfernt Rechtsform- und
+    Gattungs-Kuerzel sowie Satzzeichen, damit die Yahoo-Suche eher trifft."""
+    n = _clean_security_name(name)
+    n = re.sub(r"\b(?:INC|CORP|PLC|LTD|CO|SP\.?ADS|REGS|CL\.?[A-C]|N\.?V|S\.?A|AG|SE|REIT|ADR)\b",
+               " ", n, flags=re.IGNORECASE)
+    n = re.sub(r"[.\-/]", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
+    return n
+
+
 def _to_data_url(image: str) -> str:
     image = image.strip()
     if image.startswith("data:"):
@@ -273,39 +284,52 @@ async def refresh_prices(db: AsyncSession) -> dict:
         select(DepotPosition).where(DepotPosition.is_active == True)  # noqa: E712
     )).scalars().all()
     refreshed = stale = 0
+    fx_cache: dict[str, float | None] = {}
     async with market_data.new_client() as client:
         for p in positions:
-            # Primaer ueber ISIN, sonst Fallback ueber bereinigten Namen.
-            query = p.isin or _clean_security_name(p.name)
-            if not query:
+            quote = None
+            # 1. Primaer ueber ISIN (gecachtes Symbol bevorzugt)
+            if p.isin:
+                quote = await market_data.get_price_by_isin(client, p.isin, p.market_symbol)
+            # 2. Fallback ueber bereinigten Namen, wenn ISIN keinen Kurs liefert
+            if (not quote or not quote.get("price")) and not p.market_symbol:
+                for nm in (_clean_security_name(p.name), _clean_security_name_aggressive(p.name)):
+                    if not nm:
+                        continue
+                    sym = await market_data.resolve_symbol(client, nm)
+                    if sym:
+                        quote = await market_data.fetch_quote(client, sym)
+                        if quote and quote.get("price"):
+                            break
+            if not quote or not quote.get("price"):
                 p.price_stale = True
                 stale += 1
                 continue
-            quote = await market_data.get_price_by_isin(client, query, p.market_symbol)
-            # Waehrungs-Guard: Kurs nur uebernehmen, wenn die Waehrung zur Position passt.
-            # Verhindert, dass z.B. ein USD-Listing als EUR-Wert verbucht wird.
-            if quote and quote.get("currency") and p.currency and quote["currency"].upper() != p.currency.upper():
-                logger.info(
-                    f"Kurs verworfen fuer {p.isin}: {quote['currency']} != {p.currency} (Symbol {quote.get('symbol')})"
-                )
-                # Gecachtes Symbol verwerfen, damit beim naechsten Lauf neu aufgeloest wird
-                p.market_symbol = None
-                p.price_stale = True
-                stale += 1
-                continue
-            if quote and quote.get("price"):
-                p.last_price = quote["price"]
-                p.market_symbol = quote.get("symbol") or p.market_symbol
-                if p.quantity is not None:
-                    p.last_value = float(p.quantity) * quote["price"]
-                if quote.get("day_change_pct") is not None:
-                    p.day_change_pct = quote["day_change_pct"]
-                p.last_price_at = datetime.now(timezone.utc)
-                p.price_stale = False
-                refreshed += 1
-            else:
-                p.price_stale = True
-                stale += 1
+
+            price = quote["price"]
+            cur = (quote.get("currency") or p.currency or "EUR").upper()
+            target = (p.currency or "EUR").upper()
+            # Fremdwaehrung -> EUR umrechnen (statt zu verwerfen)
+            if cur != target:
+                if cur not in fx_cache:
+                    fx_cache[cur] = await market_data.fetch_fx_rate(client, quote.get("currency") or cur)
+                rate = fx_cache[cur]
+                if not rate:
+                    logger.info(f"Kein FX-Kurs {cur}->EUR fuer {p.isin}, Position bleibt veraltet")
+                    p.price_stale = True
+                    stale += 1
+                    continue
+                price = price * rate
+
+            p.last_price = price
+            p.market_symbol = quote.get("symbol") or p.market_symbol
+            if p.quantity is not None:
+                p.last_value = float(p.quantity) * price
+            if quote.get("day_change_pct") is not None:
+                p.day_change_pct = quote["day_change_pct"]
+            p.last_price_at = datetime.now(timezone.utc)
+            p.price_stale = False
+            refreshed += 1
     await db.flush()
     if refreshed:
         await _create_snapshot(db, source="market")

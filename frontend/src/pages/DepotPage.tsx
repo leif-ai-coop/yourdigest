@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { api } from '../api/client'
 import { PageSpinner, Spinner } from '../components/Spinner'
 import { EmptyState } from '../components/EmptyState'
-import { Wallet, Upload, RefreshCw, Plus, Trash2, Pencil, X, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react'
+import { Wallet, Upload, RefreshCw, Plus, Trash2, Pencil, X, AlertTriangle, TrendingUp, TrendingDown, Code } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -45,6 +45,7 @@ interface ParsedPosition {
   isin: string | null
   wkn: string | null
   quantity: number | null
+  avg_buy_price: number | null
   last_price: number | null
   last_value: number | null
   day_change_pct: number | null
@@ -93,6 +94,8 @@ export default function DepotPage() {
   const [error, setError] = useState<string | null>(null)
   const [editPos, setEditPos] = useState<Position | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [showHtml, setShowHtml] = useState(false)
+  const [htmlText, setHtmlText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -163,6 +166,25 @@ export default function DepotPage() {
     }
   }
 
+  const importHtml = async () => {
+    if (!htmlText.trim()) return
+    setError(null)
+    setOcrLoading(true)
+    try {
+      const result = await api.post<Preview>('/depot/import-html', { html: htmlText })
+      setPreview(result)
+      const sel: Record<number, boolean> = {}
+      result.items.forEach((it, i) => { sel[i] = it.status !== 'unchanged' })
+      setSelected(sel)
+      setShowHtml(false)
+      setHtmlText('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Quelltext-Import fehlgeschlagen')
+    } finally {
+      setOcrLoading(false)
+    }
+  }
+
   const refreshPrices = async () => {
     setRefreshing(true)
     setError(null)
@@ -205,6 +227,10 @@ export default function DepotPage() {
           <button onClick={() => fileRef.current?.click()} disabled={ocrLoading}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50">
             {ocrLoading ? <Spinner className="w-4 h-4" /> : <Upload className="w-4 h-4" />} Screenshot
+          </button>
+          <button onClick={() => setShowHtml(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80">
+            <Code className="w-4 h-4" /> Quelltext
           </button>
           <button onClick={refreshPrices} disabled={refreshing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80 disabled:opacity-50">
@@ -376,6 +402,31 @@ export default function DepotPage() {
                 </button>
                 <button onClick={() => setPreview(null)} className="px-4 py-2 text-sm rounded-lg bg-secondary hover:bg-secondary/80">Abbrechen</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHtml && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end md:items-center justify-center p-0 md:p-4" onClick={() => setShowHtml(false)}>
+          <div className="bg-card border border-border rounded-t-2xl md:rounded-2xl w-full max-w-2xl p-4 space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="font-medium">Quelltext der ING-Depotübersicht einfügen</div>
+              <button onClick={() => setShowHtml(false)}><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              ING-Depotübersicht öffnen → Rechtsklick → „Seitenquelltext anzeigen" → alles markieren (Strg+A), kopieren (Strg+C) und hier einfügen.
+              Enthält ISINs, Stück, Kurs und Einstandskurs — am genauesten.
+            </p>
+            <textarea value={htmlText} onChange={e => setHtmlText(e.target.value)}
+              placeholder="<!DOCTYPE HTML> …"
+              className="w-full h-40 px-3 py-2 text-xs font-mono rounded-lg bg-secondary border border-border focus:outline-none focus:ring-1 focus:ring-primary resize-none" />
+            <div className="flex gap-2">
+              <button onClick={importHtml} disabled={ocrLoading || !htmlText.trim()}
+                className="flex-1 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50">
+                {ocrLoading ? 'Analysiere…' : 'Auslesen'}
+              </button>
+              <button onClick={() => setShowHtml(false)} className="px-4 py-2 text-sm rounded-lg bg-secondary hover:bg-secondary/80">Abbrechen</button>
             </div>
           </div>
         </div>

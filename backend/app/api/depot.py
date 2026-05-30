@@ -11,7 +11,7 @@ from app.schemas.common import MessageResponse
 from app.schemas.depot import (
     DepotPositionCreate, DepotPositionUpdate, DepotPositionOut,
     DepotOverview, DepotTotals, DepotSnapshotOut,
-    ImportRequest, ImportPreview, ImportPreviewItem, ApplyRequest,
+    ImportRequest, ImportHtmlRequest, ImportPreview, ImportPreviewItem, ApplyRequest,
 )
 from app.exceptions import NotFoundError
 from app.services import depot_service
@@ -82,6 +82,23 @@ async def import_screenshot(data: ImportRequest, db: AsyncSession = Depends(get_
         items=[ImportPreviewItem(**i) for i in items],
         parsed_total_value=parsed.get("total_value"),
         model_used=parsed.get("model"),
+        warning=warning,
+    )
+
+
+@router.post("/import-html", response_model=ImportPreview)
+async def import_html(data: ImportHtmlRequest, db: AsyncSession = Depends(get_db)):
+    """ING-Depot-Quelltext parsen -> Vorschau (kein Auto-Commit). Liefert auch ISINs."""
+    parsed = depot_service.parse_ing_depot_html(data.html)
+    items = await depot_service.build_preview(db, parsed)
+    total = sum(p.last_value for p in parsed if p.last_value is not None) or None
+    warning = None
+    if not parsed:
+        warning = "Keine Positionen erkannt. Stelle sicher, dass der komplette Seitenquelltext der Depotuebersicht eingefuegt wurde."
+    return ImportPreview(
+        items=[ImportPreviewItem(**i) for i in items],
+        parsed_total_value=total,
+        model_used="quelltext-parser",
         warning=warning,
     )
 

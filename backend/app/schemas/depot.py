@@ -80,6 +80,7 @@ class ParsedPosition(BaseModel):
     isin: str | None = Field(None, max_length=20)
     wkn: str | None = Field(None, max_length=20)
     quantity: float | None = Field(None, ge=0)
+    avg_buy_price: float | None = Field(None, ge=0)
     last_price: float | None = Field(None, ge=0)
     last_value: float | None = Field(None, ge=0)
     day_change_pct: float | None = None
@@ -104,6 +105,10 @@ class ImportPreview(BaseModel):
 class ImportRequest(BaseModel):
     image: str = Field(..., description="Data-URL oder Base64 des Screenshots")
     model: str | None = Field(None, max_length=120)
+
+
+class ImportHtmlRequest(BaseModel):
+    html: str = Field(..., max_length=5_000_000, description="ING-Depotuebersicht Seitenquelltext")
 
 
 class ApplyRequest(BaseModel):

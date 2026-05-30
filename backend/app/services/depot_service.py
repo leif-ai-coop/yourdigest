@@ -1,4 +1,5 @@
-"""Depot-Logik: Screenshot-OCR, Abgleich, Uebernahme, Kurs-Refresh, Summen."""
+"""Depot-Logik: Screenshot-OCR, Quelltext-Import, Abgleich, Uebernahme, Kurs-Refresh, Summen."""
+import html as html_lib
 import json
 import logging
 import re
@@ -111,6 +112,63 @@ async def parse_screenshot(image: str, model: str | None = None) -> dict:
     }
 
 
+def _de_num(s: str | None) -> float | None:
+    """Deutsche Zahl '1.234,56' / '+148,30' / '-41,98' -> float."""
+    if not s:
+        return None
+    s = s.strip().replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def parse_ing_depot_html(html_src: str) -> list[ParsedPosition]:
+    """Parst den Seitenquelltext der ING-Depotuebersicht.
+
+    Extrahiert je Position deterministisch: Name, ISIN, Stueck, Einstandskurs,
+    aktueller Kurs, Kurswert, Gesamt-Performance %. Robust gegen die feste
+    ibbr-table-Struktur des Direkt-Depots.
+    """
+    positions: list[ParsedPosition] = []
+    # Auf echte Positions-Zeilen splitten (Kategorie-/Summenzeilen haben andere Klassen)
+    blocks = re.split(r'<div role="row" class="ibbr-table-row"\s+data-toggle-state', html_src)
+    for blk in blocks[1:]:
+        m_isin = re.search(r'isin=([A-Z]{2}[A-Z0-9]{9}[0-9])', blk)
+        if not m_isin:
+            continue
+        isin = m_isin.group(1)
+
+        m_name = re.search(r"<strong>([^<]+)</strong>", blk)
+        name = re.sub(r"\s+", " ", html_lib.unescape(m_name.group(1))).strip() if m_name else isin
+
+        m_qty = re.search(r'ibbr-table-cell--quantity[^>]*>\s*<span>([\d.,]+)</span>', blk)
+        # Einstandskurs = erste reine valuta-Zelle
+        m_avg = re.search(r'ibbr-table-cell valuta-aligned gs-span-20">\s*<span>([\d.,]+)</span>', blk)
+        # Aktueller Kurs = bold-sm-Zelle
+        m_price = re.search(r'ibbr-table-cell--bold-sm[^>]*>\s*<span>([\d.,]+)</span>', blk)
+        # Kurswert = brokerage + market-value
+        m_val = re.search(
+            r'ibbr-table-cell--brokerage ibbr-table-cell--market-value[^>]*>\s*<span>([\d.,]+)</span>', blk
+        )
+        # Gesamt-Performance % (seit Kauf)
+        m_pct = re.search(
+            r'u-text-(?:positive|negative)-value[^>]*>\s*<strong>\s*<span>([+\-]?[\d.,]+)</span>', blk
+        )
+
+        positions.append(ParsedPosition(
+            name=name,
+            isin=isin,
+            quantity=_de_num(m_qty.group(1)) if m_qty else None,
+            avg_buy_price=_de_num(m_avg.group(1)) if m_avg else None,
+            last_price=_de_num(m_price.group(1)) if m_price else None,
+            last_value=_de_num(m_val.group(1)) if m_val else None,
+            total_change_pct=_de_num(m_pct.group(1)) if m_pct else None,
+            currency="EUR",
+        ))
+    return positions
+
+
 def _match(parsed: ParsedPosition, existing: list[DepotPosition]) -> DepotPosition | None:
     if parsed.isin:
         for p in existing:
@@ -181,6 +239,8 @@ async def apply_positions(
         m.wkn = parsed.wkn or m.wkn
         if parsed.quantity is not None:
             m.quantity = parsed.quantity
+        if parsed.avg_buy_price is not None:
+            m.avg_buy_price = parsed.avg_buy_price
         if parsed.currency:
             m.currency = parsed.currency
         if parsed.last_price is not None:

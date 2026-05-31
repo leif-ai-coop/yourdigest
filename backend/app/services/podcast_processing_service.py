@@ -7,10 +7,12 @@ Two processing paths:
 
 No more Map-Reduce — summary always runs on the full transcript in a single call.
 """
+import asyncio
 import base64
 import hashlib
 import logging
 import os
+import subprocess
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -164,8 +166,8 @@ async def download_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> b
 
         if not episode.duration_seconds:
             try:
-                import subprocess
-                probe = subprocess.run(
+                probe = await asyncio.to_thread(
+                    subprocess.run,
                     ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                      "-of", "csv=p=0", str(audio_path)],
                     capture_output=True, text=True, timeout=30,
@@ -194,10 +196,11 @@ async def download_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> b
 
 async def chunk_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> bool:
     """Split episode audio into chunks using ffmpeg subprocess (no RAM loading).
-    Only needed for OpenRouter path."""
-    import asyncio as _aio
-    import subprocess
+    Only needed for OpenRouter path.
 
+    ffprobe/ffmpeg run via asyncio.to_thread so a long-running chunking job does
+    not block the event loop (which also serves the API in this single process).
+    """
     run = _create_run(episode.id, "chunk")
     db.add(run)
 
@@ -210,8 +213,9 @@ async def chunk_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> bool
         if not episode.audio_path or not os.path.exists(episode.audio_path):
             raise FileNotFoundError(f"Audio file not found: {episode.audio_path}")
 
-        # Get duration via ffprobe (no RAM usage)
-        probe = subprocess.run(
+        # Get duration via ffprobe (no RAM usage; off-loop so the API stays responsive)
+        probe = await asyncio.to_thread(
+            subprocess.run,
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "csv=p=0", episode.audio_path],
             capture_output=True, text=True, timeout=30,
@@ -233,8 +237,10 @@ async def chunk_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> bool
 
             chunk_path = ep_dir / f"chunk_{chunk_index:04d}.mp3"
 
-            # ffmpeg chunk extraction — streams directly, no full file in RAM
-            proc = subprocess.run(
+            # ffmpeg chunk extraction — streams directly, no full file in RAM.
+            # Off-loop (to_thread) so this CPU-bound call doesn't freeze the API.
+            proc = await asyncio.to_thread(
+                subprocess.run,
                 ["ffmpeg", "-y", "-ss", str(chunk_start), "-t", str(duration),
                  "-i", episode.audio_path, "-ab", "64k", "-ac", "1",
                  "-ar", "22050", str(chunk_path)],
@@ -302,13 +308,16 @@ async def transcribe_episode_gemini(db: AsyncSession, episode: PodcastEpisode, m
         if not episode.audio_path or not os.path.exists(episode.audio_path):
             raise FileNotFoundError(f"Audio not found: {episode.audio_path}")
 
-        # Upload file to Gemini
-        audio_file = genai.upload_file(episode.audio_path)
+        # Upload file to Gemini. The google-generativeai SDK is synchronous and
+        # generate_content can run for minutes — run both off the event loop via
+        # asyncio.to_thread so the single-process API stays responsive.
+        audio_file = await asyncio.to_thread(genai.upload_file, episode.audio_path)
         logger.info(f"Uploaded audio to Gemini: {audio_file.name}")
 
         # Transcribe
         gm = genai.GenerativeModel(used_model)
-        response = gm.generate_content(
+        response = await asyncio.to_thread(
+            gm.generate_content,
             [
                 audio_file,
                 "Transkribiere dieses Audio wortgetreu. Gib nur das Transkript aus, ohne Kommentare oder Formatierung. Behalte die Originalsprache bei."
@@ -340,9 +349,9 @@ async def transcribe_episode_gemini(db: AsyncSession, episode: PodcastEpisode, m
             tokens = getattr(response.usage_metadata, 'total_token_count', None)
         _complete_run(run, tokens=tokens, duration_ms=duration_ms)
 
-        # Cleanup uploaded file
+        # Cleanup uploaded file (off-loop; network I/O, best-effort)
         try:
-            genai.delete_file(audio_file.name)
+            await asyncio.to_thread(genai.delete_file, audio_file.name)
         except Exception:
             pass
 

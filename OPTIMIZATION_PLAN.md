@@ -39,12 +39,14 @@ Umgesetzt, deployed, verifiziert (commits `69b72f4` + Fix `2610f34`):
 - **P1-8** ✅ Audit-Count via `func.count()` statt `len(.all())`
 - **P1-9** ✅ Digest-AI-Summary Cap auf 100 Mails
 
+**Sprint 2 ✅ ERLEDIGT** (2026-05-31, assistant `6e47c63` + infra `f6f7759`):
+- **P1-11** ✅ Postgres-Tuning (shared_buffers 96MB, effective_cache_size 256MB, max_connections 30, work_mem 8MB, maintenance_work_mem 48MB). DB-RAM ~86→~46 MiB.
+- **P1-12** ✅ Nginx gzip (recharts.js 392→115 KB).
+- **P1-13 / P1-14** ✅ Frontend Code-Splitting (lazy routes + Suspense) + manualChunks (react, recharts eigener Chunk).
+
 **Noch offen aus P1:**
 - **P1-1 / P1-2** ⏳ Event-Loop-Blocking (ffmpeg `subprocess.run` + Gemini-SDK `generate_content` in `asyncio.to_thread`). Bewusst zurückgestellt — heikelste Änderung (Podcast-Pipeline, schwer ohne echte Episode zu testen), verdient eigenen Durchgang.
 - **P1-10** ⏳ Per-Mail-Klassifikation / Prompt-Caching
-- **P1-11** ⏳ Postgres-Tuning (command-Override)
-- **P1-12** ⏳ Nginx gzip
-- **P1-13 / P1-14** ⏳ Frontend Code-Splitting + manualChunks
 - Redundanter Alt-Index `ix_mail_message_is_read` (nur `is_read`) noch nicht gedroppt (Classifier-Freigabe nötig; schadet nicht, nur überflüssig)
 
 ### Lessons learned (für künftige Durchgänge)

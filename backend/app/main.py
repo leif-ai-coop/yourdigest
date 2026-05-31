@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -10,6 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import get_settings
+from app.dependencies import get_current_user
 from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts, depot
 
 
@@ -66,18 +67,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# health is intentionally unauthenticated (Docker healthcheck hits it via curl
+# without Authentik headers). Every other router requires a valid forward-auth
+# identity — defense in depth in case the reverse proxy is ever bypassed.
+# NPM injects X-authentik-* on the /api location (proxy_host 7.conf).
+auth = [Depends(get_current_user)]
+
 app.include_router(health.router)
-app.include_router(connectors.router, prefix="/api/connectors", tags=["connectors"])
-app.include_router(audit.router, prefix="/api/audit", tags=["audit"])
-app.include_router(mail.router, prefix="/api/mail", tags=["mail"])
-app.include_router(classification.router, prefix="/api/classification", tags=["classification"])
-app.include_router(forwarding.router, prefix="/api/forwarding", tags=["forwarding"])
-app.include_router(digest.router, prefix="/api/digest", tags=["digest"])
-app.include_router(feeds.router, prefix="/api/feeds", tags=["feeds"])
-app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
-app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
-app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
-app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
-app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"])
-app.include_router(podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
-app.include_router(depot.router, prefix="/api/depot", tags=["depot"])
+app.include_router(connectors.router, prefix="/api/connectors", tags=["connectors"], dependencies=auth)
+app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=auth)
+app.include_router(mail.router, prefix="/api/mail", tags=["mail"], dependencies=auth)
+app.include_router(classification.router, prefix="/api/classification", tags=["classification"], dependencies=auth)
+app.include_router(forwarding.router, prefix="/api/forwarding", tags=["forwarding"], dependencies=auth)
+app.include_router(digest.router, prefix="/api/digest", tags=["digest"], dependencies=auth)
+app.include_router(feeds.router, prefix="/api/feeds", tags=["feeds"], dependencies=auth)
+app.include_router(weather.router, prefix="/api/weather", tags=["weather"], dependencies=auth)
+app.include_router(llm.router, prefix="/api/llm", tags=["llm"], dependencies=auth)
+app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"], dependencies=auth)
+app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"], dependencies=auth)
+app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"], dependencies=auth)
+app.include_router(podcasts.router, prefix="/api/podcasts", tags=["podcasts"], dependencies=auth)
+app.include_router(depot.router, prefix="/api/depot", tags=["depot"], dependencies=auth)

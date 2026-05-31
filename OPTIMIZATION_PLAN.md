@@ -44,8 +44,10 @@ Umgesetzt, deployed, verifiziert (commits `69b72f4` + Fix `2610f34`):
 - **P1-12** ✅ Nginx gzip (recharts.js 392→115 KB).
 - **P1-13 / P1-14** ✅ Frontend Code-Splitting (lazy routes + Suspense) + manualChunks (react, recharts eigener Chunk).
 
+**Sprint 3 ✅ ERLEDIGT** (2026-05-31, assistant `ab2c218`):
+- **P1-1 / P1-2** ✅ Event-Loop-Blocking behoben: ffprobe/ffmpeg (download+chunk) + Gemini-SDK (`upload_file`/`generate_content`/`delete_file`) laufen jetzt via `asyncio.to_thread` off-loop. API bleibt während Podcast-Verarbeitung responsiv. Verifiziert: Modul importiert, alle Podcast-Endpoints 200. (Echte Episode-Pipeline noch nicht durchlaufen — wird beim nächsten realen Feed-Sync getestet.)
+
 **Noch offen aus P1:**
-- **P1-1 / P1-2** ⏳ Event-Loop-Blocking (ffmpeg `subprocess.run` + Gemini-SDK `generate_content` in `asyncio.to_thread`). Bewusst zurückgestellt — heikelste Änderung (Podcast-Pipeline, schwer ohne echte Episode zu testen), verdient eigenen Durchgang.
 - **P1-10** ⏳ Per-Mail-Klassifikation / Prompt-Caching
 - Redundanter Alt-Index `ix_mail_message_is_read` (nur `is_read`) noch nicht gedroppt (Classifier-Freigabe nötig; schadet nicht, nur überflüssig)
 

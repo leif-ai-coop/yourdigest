@@ -210,14 +210,15 @@ async def list_messages(
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    # The list view never renders bodies/headers — defer those heavy columns so a
+    # The list view never renders the bodies — defer those heavy columns so a
     # 50-row page doesn't pull dozens of 50-500 KB HTML blobs into RAM.
+    # raw_headers is NOT deferred: _add_unsubscribe() reads it (deferred access
+    # would trigger a lazy load and fail in the async session).
     query = (
         select(MailMessage)
         .options(
             defer(MailMessage.body_text),
             defer(MailMessage.body_html),
-            defer(MailMessage.raw_headers),
         )
         .order_by(desc(MailMessage.date), desc(MailMessage.id))
     )

@@ -601,6 +601,85 @@ async def cleanup_episode_audio(db: AsyncSession, episode: PodcastEpisode):
 
 
 # ---------------------------------------------------------------------------
+# Orphan / stale audio reaper (safety net beyond the success-path cleanup)
+# ---------------------------------------------------------------------------
+
+async def reap_orphan_audio(db: AsyncSession) -> dict:
+    """Periodic safety-net cleanup of the audio volume.
+
+    ``cleanup_episode_audio`` only runs after a *successful* summary, so audio of
+    failed/aborted episodes accumulates forever. This reaper removes directories
+    that are safe to delete:
+      - no matching episode row (true orphans)
+      - episode status done/skipped (respecting feed.keep_audio_days)
+      - episode status error and older than 7 days (retries had their chance)
+    It never touches episodes that are actively processing or currently locked.
+    """
+    import shutil
+
+    if not AUDIO_DIR.exists():
+        return {"deleted": 0, "freed_mb": 0}
+
+    result = await db.execute(
+        select(
+            PodcastEpisode.id,
+            PodcastEpisode.processing_status,
+            PodcastEpisode.locked_at,
+            PodcastEpisode.audio_downloaded_at,
+            PodcastFeed.keep_audio_days,
+        ).join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id, isouter=True)
+    )
+    episodes = {str(row[0]): row for row in result.all()}
+
+    now = datetime.now(timezone.utc)
+    active = {"pending", "downloading", "transcribing", "summarizing"}
+    deleted = 0
+    freed = 0
+
+    for ep_dir in AUDIO_DIR.iterdir():
+        if not ep_dir.is_dir():
+            continue
+        row = episodes.get(ep_dir.name)
+        should_delete = False
+
+        if row is None:
+            should_delete = True  # orphan: no DB row
+        else:
+            _id, status, locked_at, downloaded_at, keep_days = row
+            if status in active or locked_at is not None:
+                should_delete = False
+            elif status in ("done", "skipped"):
+                if keep_days is not None and downloaded_at is not None \
+                        and downloaded_at > now - timedelta(days=keep_days):
+                    should_delete = False
+                else:
+                    should_delete = True
+            elif status == "error":
+                should_delete = downloaded_at is None or downloaded_at < now - timedelta(days=7)
+
+        if not should_delete:
+            continue
+
+        try:
+            size = sum(f.stat().st_size for f in ep_dir.rglob("*") if f.is_file())
+            shutil.rmtree(ep_dir)
+            deleted += 1
+            freed += size
+            if row is not None:
+                ep = await db.get(PodcastEpisode, uuid.UUID(ep_dir.name))
+                if ep:
+                    ep.audio_path = None
+        except Exception as e:
+            logger.error(f"reap_orphan_audio: failed to delete {ep_dir}: {e}")
+
+    if deleted:
+        await db.commit()
+        logger.info(f"reap_orphan_audio: removed {deleted} dir(s), freed {freed // (1024 * 1024)} MB")
+
+    return {"deleted": deleted, "freed_mb": freed // (1024 * 1024)}
+
+
+# ---------------------------------------------------------------------------
 # Release stale locks
 # ---------------------------------------------------------------------------
 

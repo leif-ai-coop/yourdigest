@@ -19,6 +19,7 @@ async def start_scheduler():
     from app.worker.tasks.podcast_download import podcast_download_job
     from app.worker.tasks.podcast_transcribe import podcast_transcribe_job
     from app.worker.tasks.podcast_summarize import podcast_summarize_job
+    from app.worker.tasks.podcast_cleanup import podcast_cleanup_job
     from app.worker.tasks.depot_refresh import depot_refresh_job
 
     scheduler.add_job(mail_fetch_job, "interval", minutes=5, id="mail_fetch", replace_existing=True)
@@ -32,6 +33,7 @@ async def start_scheduler():
     scheduler.add_job(podcast_download_job, "interval", minutes=10, id="podcast_download", replace_existing=True)
     scheduler.add_job(podcast_transcribe_job, "interval", minutes=5, id="podcast_transcribe", replace_existing=True)
     scheduler.add_job(podcast_summarize_job, "interval", minutes=5, id="podcast_summarize", replace_existing=True)
+    scheduler.add_job(podcast_cleanup_job, "interval", hours=6, id="podcast_cleanup", replace_existing=True)
 
     # Schedule digest policies
     await schedule_digest_policies()

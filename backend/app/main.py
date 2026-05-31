@@ -16,8 +16,17 @@ from app.api import health, connectors, audit, mail, classification, forwarding,
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
+    logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
     logger = logging.getLogger(__name__)
+
+    # Fail fast on a weak/unset SECRET_KEY: the Fernet key for all stored
+    # credentials (mail/garmin/LLM) is derived from it.
+    if settings.secret_key in {"", "changeme", "dev-secret-key-change-in-production"} or len(settings.secret_key) < 32:
+        raise RuntimeError(
+            "SECRET_KEY is unset, default, or too short (<32 chars). "
+            "Set a strong ASSISTANT_SECRET_KEY before starting."
+        )
+
     logger.info("Assistant API starting up")
 
     # Seed default podcast prompts

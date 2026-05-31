@@ -28,7 +28,33 @@ Alle 6 Punkte umgesetzt, deployed und verifiziert. API/DB/Redis/Frontend laufen 
 
 ---
 
-## P1 — Hoher Nutzen (Stabilität, Kosten, RAM)
+## P1 — Hoher Nutzen ✅ GRÖSSTENTEILS ERLEDIGT (2026-05-31)
+
+Umgesetzt, deployed, verifiziert (commits `69b72f4` + Fix `2610f34`):
+- **P1-3** ✅ Scheduler `job_defaults` (coalesce + max_instances=1 + misfire_grace_time=300)
+- **P1-4** ✅ AsyncOpenAI timeout=60s + max_retries=3
+- **P1-5** ✅ Mail-Liste deferred `body_text`/`body_html` (NICHT `raw_headers` — wird von `_add_unsubscribe` gelesen, deferred→MissingGreenlet)
+- **P1-6** ✅ Digest N+1 → `selectinload(MailMessage.classifications)`
+- **P1-7** ✅ 6 Indizes live via `CREATE INDEX CONCURRENTLY`: `ix_mail_message_acct_folder_date`, `ix_podcast_episode_published_at`, `ix_rss_item_feed_guid`, `ix_rss_item_published_at`, `ix_mail_classification_message_id`, `ix_depot_snapshot_captured_at` + Modell `models/mail.py` angeglichen
+- **P1-8** ✅ Audit-Count via `func.count()` statt `len(.all())`
+- **P1-9** ✅ Digest-AI-Summary Cap auf 100 Mails
+
+**Noch offen aus P1:**
+- **P1-1 / P1-2** ⏳ Event-Loop-Blocking (ffmpeg `subprocess.run` + Gemini-SDK `generate_content` in `asyncio.to_thread`). Bewusst zurückgestellt — heikelste Änderung (Podcast-Pipeline, schwer ohne echte Episode zu testen), verdient eigenen Durchgang.
+- **P1-10** ⏳ Per-Mail-Klassifikation / Prompt-Caching
+- **P1-11** ⏳ Postgres-Tuning (command-Override)
+- **P1-12** ⏳ Nginx gzip
+- **P1-13 / P1-14** ⏳ Frontend Code-Splitting + manualChunks
+- Redundanter Alt-Index `ix_mail_message_is_read` (nur `is_read`) noch nicht gedroppt (Classifier-Freigabe nötig; schadet nicht, nur überflüssig)
+
+### Lessons learned (für künftige Durchgänge)
+- **Immer Datei lesen vor Edit** — Batch-Edits mit geratenen Strings sind mehrfach ins Leere gelaufen.
+- **Endpoint-Smoke-Test VOR commit/deploy**, nicht danach (defekter `69b72f4` ging kurz live: Mail-Liste 500).
+- **Live-DB-Schemaänderungen** brauchen explizite User-Freigabe (Classifier blockt sonst) → `CREATE INDEX CONCURRENTLY`.
+
+---
+
+## P1 (Original-Liste — Detail)
 
 ### Backend-Stabilität (Event-Loop-Blocking — größtes Stabilitätsrisiko)
 - **P1-1** ✓✓ **Synchrone `subprocess.run` (ffmpeg/ffprobe) blockieren den Event-Loop** während Podcast-Chunking → ganze API friert ein. `podcast_processing_service.py:168,214,237`. → `await asyncio.to_thread(subprocess.run, ...)`. Aufwand S.

@@ -50,7 +50,7 @@ Umgesetzt, deployed, verifiziert (commits `69b72f4` + Fix `2610f34`):
 **Noch offen aus P1:**
 - **P1-10** ⏳ Per-Mail-Klassifikation / Prompt-Caching
 
-**Sprint 4 ✅ ERLEDIGT** (2026-05-31, assistant `3d1f9e8`):
+**Sprint 4 ✅ ERLEDIGT** (2026-05-31, assistant `b2af8e2`):
 - **P2-1** ✅ Alembic-Drift behoben: Migration `002` (revision `a22574149180`) ergaenzt die 13 in `001` fehlenden Tabellen + nachtraegliche Spalten. `script.py.mako` wiederhergestellt (autogenerate wieder moeglich). Verifiziert via Wegwerf-DB: 001+002 = Live-DB exakt (`alembic check` clean). Live auf 002 gestampt (keine Schema-Aenderung). Frische DB ist jetzt reproduzierbar → DR-Risiko geschlossen.
 - Redundanter Alt-Index `ix_mail_message_is_read` (nur `is_read`) noch nicht gedroppt (Classifier-Freigabe nötig; schadet nicht, nur überflüssig)
 

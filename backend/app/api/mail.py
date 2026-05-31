@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, defer
 
 from app.database import get_db
 from app.models.mail import MailAccount, MailMessage
@@ -210,7 +210,17 @@ async def list_messages(
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(MailMessage).order_by(desc(MailMessage.date), desc(MailMessage.id))
+    # The list view never renders bodies/headers — defer those heavy columns so a
+    # 50-row page doesn't pull dozens of 50-500 KB HTML blobs into RAM.
+    query = (
+        select(MailMessage)
+        .options(
+            defer(MailMessage.body_text),
+            defer(MailMessage.body_html),
+            defer(MailMessage.raw_headers),
+        )
+        .order_by(desc(MailMessage.date), desc(MailMessage.id))
+    )
     if account_id:
         query = query.where(MailMessage.account_id == account_id)
     if folder:

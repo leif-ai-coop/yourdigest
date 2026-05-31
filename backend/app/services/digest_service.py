@@ -93,7 +93,10 @@ async def collect_mail_items(
     """Collect mail items based on policy filters."""
     query = (
         select(MailMessage)
-        .options(selectinload(MailMessage.links))
+        .options(
+            selectinload(MailMessage.links),
+            selectinload(MailMessage.classifications),
+        )
         .where(MailMessage.date >= since)
         .order_by(desc(MailMessage.date))
     )
@@ -103,10 +106,8 @@ async def collect_mail_items(
 
     items = []
     for msg in messages:
-        cls_result = await db.execute(
-            select(MailClassification).where(MailClassification.message_id == msg.id)
-        )
-        classification = cls_result.scalars().first()
+        # Classification is eager-loaded above — no per-mail query (invariant: 0 or 1).
+        classification = msg.classifications[0] if msg.classifications else None
         category = classification.category if classification else "uncategorized"
 
         if policy.include_categories:
@@ -701,11 +702,20 @@ async def generate_ai_summary(
             system_prompt, user_template = await get_prompt(db, "digest")
             system_prompt += HTML_OUTPUT_INSTRUCTION
 
+        # Cap the prompt size: a large backlog (each item carries up to 2000 chars
+        # of body) could otherwise blow past the model context. 100 mails is plenty
+        # for an overview; the rest are noted as a count.
+        MAX_SUMMARY_MAILS = 100
+        total_count = len(mail_items)
+        summary_items = mail_items[:MAX_SUMMARY_MAILS]
+
         # Build detailed items text with all available info
-        items_text = f"Total emails: {len(mail_items)}\n"
-        for i, item in enumerate(mail_items, 1):
+        items_text = f"Total emails: {total_count}\n"
+        if total_count > MAX_SUMMARY_MAILS:
+            items_text += f"(showing newest {MAX_SUMMARY_MAILS}; {total_count - MAX_SUMMARY_MAILS} more omitted)\n"
+        for i, item in enumerate(summary_items, 1):
             items_text += f"\n{'='*60}\n"
-            items_text += f"EMAIL {i}/{len(mail_items)}\n"
+            items_text += f"EMAIL {i}/{len(summary_items)}\n"
             items_text += f"Category: {item['category']}\n"
             items_text += f"From: {item['from']}\n"
             items_text += f"Subject: {item['subject']}\n"

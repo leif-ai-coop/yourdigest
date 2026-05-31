@@ -7,7 +7,12 @@ from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+# coalesce: collapse missed runs into one; max_instances=1: never overlap a
+# job with itself (critical for RAM-heavy podcast jobs on the 3.8 GiB VPS);
+# misfire_grace_time: still run a job up to 5 min late after a hiccup.
+scheduler = AsyncIOScheduler(
+    job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+)
 
 
 async def start_scheduler():

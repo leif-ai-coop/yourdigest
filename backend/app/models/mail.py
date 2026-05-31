@@ -32,8 +32,9 @@ class MailMessage(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "mail_message"
     __table_args__ = (
         Index("ix_mail_message_account_folder_uid", "account_id", "folder", "uid", unique=True),
+        # Composite for the main inbox list query (filter account+folder, sort date).
+        Index("ix_mail_message_acct_folder_date", "account_id", "folder", "date"),
         Index("ix_mail_message_date", "date"),
-        Index("ix_mail_message_is_read", "is_read"),
     )
 
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("mail_account.id"), nullable=False)

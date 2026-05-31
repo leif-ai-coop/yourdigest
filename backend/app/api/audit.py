@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -22,8 +22,13 @@ async def list_audit_logs(
     if entity_type:
         query = query.where(AuditLog.entity_type == entity_type)
 
-    total_result = await db.execute(select(AuditLog.id).where(query.whereclause) if query.whereclause is not None else select(AuditLog.id))
-    total = len(total_result.all())
+    # Count in the DB instead of materialising every matching id into RAM.
+    count_query = select(func.count()).select_from(AuditLog)
+    if action:
+        count_query = count_query.where(AuditLog.action == action)
+    if entity_type:
+        count_query = count_query.where(AuditLog.entity_type == entity_type)
+    total = await db.scalar(count_query)
 
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)

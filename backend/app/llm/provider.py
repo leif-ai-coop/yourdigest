@@ -16,6 +16,8 @@ class LlmProvider:
         self.client = AsyncOpenAI(
             api_key=settings.openrouter_api_key,
             base_url=settings.openrouter_base_url,
+            timeout=60.0,
+            max_retries=3,
         )
         self.default_model = settings.openrouter_model
 

@@ -9,4 +9,15 @@ export default defineConfig({
       '/api': 'http://localhost:8000',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split heavy/stable deps into their own long-cached chunks.
+          react: ['react', 'react-dom', 'react-router-dom'],
+          recharts: ['recharts'],
+        },
+      },
+    },
+  },
 })

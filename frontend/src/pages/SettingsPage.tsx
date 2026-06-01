@@ -81,7 +81,7 @@ interface ClassificationRule {
 }
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'weather' | 'assistant' | 'garmin' | 'digests' | 'logs'>('accounts')
+  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'weather' | 'assistant' | 'garmin' | 'digests' | 'logs'>('digests')
   const [accounts, setAccounts] = useState<MailAccount[]>([])
   const [rules, setRules] = useState<ClassificationRule[]>([])
   const [providers, setProviders] = useState<LlmProvider[]>([])
@@ -163,6 +163,12 @@ export default function SettingsPage() {
       setWeatherSources(ws)
       setAssistantSettings(as_)
     }).finally(() => setLoading(false))
+  }, [])
+
+  // Show the active LLM model immediately (lightweight) — independent of the
+  // heavy "Load available models" list.
+  useEffect(() => {
+    api.get<{ model: string }>('/llm/active-model').then(a => setActiveModel(a.model)).catch(() => {})
   }, [])
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -261,6 +267,7 @@ export default function SettingsPage() {
   if (loading) return <PageSpinner />
 
   const tabs = [
+    { key: 'digests' as const, label: 'Digests', icon: FileText },
     { key: 'accounts' as const, label: 'Mail Accounts', icon: Mail },
     { key: 'rules' as const, label: 'Classification Rules', icon: Zap },
     { key: 'categories' as const, label: 'Categories', icon: Tag },
@@ -269,7 +276,6 @@ export default function SettingsPage() {
     { key: 'llm' as const, label: 'LLM Providers', icon: Brain },
     { key: 'assistant' as const, label: 'Assistant', icon: MessageSquare },
     { key: 'garmin' as const, label: 'Garmin', icon: Watch },
-    { key: 'digests' as const, label: 'Digests', icon: FileText },
     { key: 'logs' as const, label: 'Logs', icon: ScrollText },
   ]
 

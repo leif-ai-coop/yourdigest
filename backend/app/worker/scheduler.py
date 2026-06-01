@@ -31,7 +31,7 @@ async def start_scheduler():
     scheduler.add_job(mail_fetch_job, "interval", minutes=5, id="mail_fetch", replace_existing=True)
     scheduler.add_job(feed_fetch_job, "interval", minutes=30, id="feed_fetch", replace_existing=True)
     scheduler.add_job(rss_summary_job, "interval", minutes=5, id="rss_summary", replace_existing=True)
-    scheduler.add_job(weather_fetch_job, "interval", minutes=60, id="weather_fetch", replace_existing=True)
+    scheduler.add_job(weather_fetch_job, "interval", minutes=30, id="weather_fetch", replace_existing=True)
     scheduler.add_job(garmin_fetch_job, "interval", minutes=60, id="garmin_fetch", replace_existing=True)
     scheduler.add_job(depot_refresh_job, "interval", minutes=60, id="depot_refresh", replace_existing=True)
 

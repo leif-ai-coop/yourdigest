@@ -118,12 +118,9 @@ def _num(v):
 
 
 async def _podcasts(db: AsyncSession) -> dict:
-    rows = (await db.execute(
-        select(PodcastEpisode.processing_status, func.count(PodcastEpisode.id))
-        .group_by(PodcastEpisode.processing_status)
-    )).all()
-    counts = {status: c for status, c in rows}
-    active_states = ("downloading", "chunking", "transcribing", "summarizing")
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    feeds = await db.scalar(select(func.count(PodcastFeed.id)).where(PodcastFeed.enabled == True))  # noqa: E712
+    new_24h = await db.scalar(select(func.count(PodcastEpisode.id)).where(PodcastEpisode.published_at >= since))
     rows = (await db.execute(
         select(PodcastEpisode, PodcastFeed.title)
         .join(PodcastFeed, PodcastFeed.id == PodcastEpisode.feed_id)
@@ -134,10 +131,8 @@ async def _podcasts(db: AsyncSession) -> dict:
         "published_at": str(ep.published_at) if ep.published_at else None,
     } for ep, feed_title in rows]
     return {
-        "queued": counts.get("pending", 0),
-        "active": sum(counts.get(s, 0) for s in active_states),
-        "errors": counts.get("error", 0),
-        "done": counts.get("done", 0),
+        "feeds": feeds or 0,
+        "new_24h": new_24h or 0,
         "latest": latest,
     }
 

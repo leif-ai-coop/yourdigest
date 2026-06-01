@@ -614,7 +614,8 @@ async def generate_weather_summary(db: AsyncSession, weather_data: dict, custom_
 
         weather_text = f"Standort: {location}\n"
         weather_text += f"Aktuell: {current.get('temp')}°C (gefühlt {current.get('feels_like')}°C), {current.get('weather_desc')}\n"
-        weather_text += f"Wind: {current.get('wind')} km/h, Luftfeuchtigkeit: {current.get('humidity')}%\n\n"
+        weather_text += f"Wind: {current.get('wind')} km/h, Luftfeuchtigkeit: {current.get('humidity')}%"
+        weather_text += (f", UV-Index: {current.get('uv_index')}\n\n" if current.get('uv_index') is not None else "\n\n")
         weather_text += "Tagesverlauf heute:\n"
         for p in periods:
             weather_text += f"  {p['name']}: {p['temp_avg']}°C ({p['temp_min']}–{p['temp_max']}°C), {p['weather_desc']}"
@@ -676,6 +677,8 @@ def render_weather_section(weather: dict | None, ai_summary: str | None = None) 
     current_temp = current.get("temp", "?")
     current_desc = current.get("weather_desc", "")
     feels_like = current.get("feels_like", "?")
+    uv_now = current.get("uv_index")
+    uv_current = f" · UV {round(uv_now)}" if uv_now is not None else ""
 
     # AI summary
     ai_html = ""
@@ -719,12 +722,15 @@ def render_weather_section(weather: dict | None, ai_summary: str | None = None) 
                 day_label = d.get("date", "?")
                 date_label = ""
             precip = f'<div style="font-size:10px;color:#60A5FA">💧 {d["precip_probability"]}%</div>' if d.get("precip_probability", 0) > 20 else ""
+            uv_d = d.get("uv_index")
+            uv_html = f'<div style="font-size:10px;color:#f59e0b">UV {round(uv_d)}</div>' if uv_d is not None else ""
             fcols += f"""
         <td style="text-align:center;padding:8px 4px">
           <div style="font-size:12px;font-weight:600;color:#a0aec0">{day_label}</div>
           <div style="font-size:10px;color:#5a6a85">{date_label}</div>
           <div style="margin:4px auto;width:32px">{icon}</div>
           <div style="font-size:13px;color:#e2e8f0">{d['temp_min']}–{d['temp_max']}°</div>
+          {uv_html}
           {precip}
         </td>"""
 
@@ -743,7 +749,7 @@ def render_weather_section(weather: dict | None, ai_summary: str | None = None) 
           <td style="vertical-align:middle;padding-left:14px">
             <div style="font-size:28px;font-weight:700;color:#e2e8f0">{current_temp}°C</div>
             <div style="font-size:13px;color:#a0aec0">{current_desc} · Gefühlt {feels_like}°C</div>
-            <div style="font-size:11px;color:#7a8ba8">{location} · Wind {current.get('wind', '?')} km/h · Luftfeuchtigkeit {current.get('humidity', '?')}%</div>
+            <div style="font-size:11px;color:#7a8ba8">{location} · Wind {current.get('wind', '?')} km/h · Luftfeuchtigkeit {current.get('humidity', '?')}%{uv_current}</div>
           </td>
         </tr>
       </table>

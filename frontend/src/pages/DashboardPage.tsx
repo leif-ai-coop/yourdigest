@@ -19,10 +19,10 @@ import {
 interface Summary {
   inbox?: { received: number; unread: number; flagged: number; categories: { category: string; count: number }[]; latest: { id: string; subject: string | null; is_read: boolean }[] } | null
   depot?: { totals: any; series: { date: string; value: number }[]; top: { name: string; last_value: number | null; day_change_pct: number | null }[] } | null
-  podcasts?: { queued: number; active: number; errors: number; done: number; latest: { id: string; title: string; feed: string; status: string; published_at: string | null }[] } | null
+  podcasts?: { feeds: number; new_24h: number; latest: { id: string; title: string; feed: string; status: string; published_at: string | null }[] } | null
   rss?: { feeds: number; new_24h: number; latest: { id: string; title: string | null; feed: string; published_at: string | null }[] } | null
   digests?: { last_run: { policy: string; status: string; item_count: number; started_at: string } | null; active_policies: number } | null
-  weather?: { source: string; temperature: number | null; feels_like: number | null; condition: string | null; icon: string | null; humidity: number | null; wind: number | null; uv_index: number | null; forecast: any[] } | null
+  weather?: { source: string; temperature: number | null; feels_like: number | null; condition: string | null; icon: string | null; humidity: number | null; wind: number | null; uv_index: number | null; forecast: any[]; at: string } | null
   activity?: { recent: { action: string; entity_type: string | null; at: string }[] } | null
 }
 interface Config { order: string[]; hidden: string[] }
@@ -281,12 +281,7 @@ function Widget({ id, summary }: { id: string; summary: Summary | null }) {
     const dd = summary.podcasts; if (!dd) return <Empty />
     return (
       <div className="space-y-2">
-        <div className="flex gap-4">
-          {dd.active > 0 && <span className="text-xs text-blue-400">{dd.active} aktiv</span>}
-          {dd.queued > 0 && <span className="text-xs text-muted-foreground">{dd.queued} wartend</span>}
-          {dd.errors > 0 && <span className="text-xs text-red-400">{dd.errors} Fehler</span>}
-          <span className="text-xs text-emerald-400">{dd.done} fertig</span>
-        </div>
+        <div className="flex gap-6"><Stat label="Feeds" value={dd.feeds} /><Stat label="neu (24h)" value={<span className="text-primary">{dd.new_24h}</span>} /></div>
         <div className="space-y-1">
           {dd.latest.map((e) => (
             <button key={e.id} onClick={ev => go(ev, `/podcasts?episode=${e.id}`)} className="w-full text-left text-xs flex items-center gap-2 hover:text-primary">
@@ -339,7 +334,7 @@ function Widget({ id, summary }: { id: string; summary: Summary | null }) {
           <Icon className="w-12 h-12 text-primary flex-shrink-0" />
           <div>
             <div className="flex items-baseline gap-2"><span className="text-3xl font-semibold text-foreground">{dd.temperature != null ? `${dd.temperature.toFixed(0)}°` : '–'}</span><span className="text-sm text-muted-foreground">{dd.condition}</span></div>
-            <div className="text-xs text-muted-foreground">{dd.source}{dd.feels_like != null ? ` · gefühlt ${dd.feels_like.toFixed(0)}°` : ''}</div>
+            <div className="text-xs text-muted-foreground">{dd.source}{dd.feels_like != null ? ` · gefühlt ${dd.feels_like.toFixed(0)}°` : ''}{dd.at ? ` · Stand ${new Date(dd.at.replace(' ', 'T')).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}` : ''}</div>
           </div>
         </div>
         <div className="flex gap-4 text-xs text-muted-foreground">
@@ -356,6 +351,7 @@ function Widget({ id, summary }: { id: string; summary: Summary | null }) {
                   <span>{new Date(f.date).toLocaleDateString('de-DE', { weekday: 'short' })}</span>
                   <FI className="w-5 h-5 my-0.5 text-foreground/70" />
                   <span className="text-foreground">{Math.round(f.temp_max)}°<span className="text-muted-foreground">/{Math.round(f.temp_min)}°</span></span>
+                  {f.uv_index != null && <span className="flex items-center gap-0.5 mt-0.5"><Sun className="w-3 h-3 text-amber-400" />{Math.round(f.uv_index)}</span>}
                 </div>
               )
             })}

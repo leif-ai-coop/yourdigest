@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Inbox, FileText, Settings, ScrollText, PanelLeftClose, PanelLeft, MessageSquare, Heart, Headphones, Wallet, Rss, LogOut } from 'lucide-react'
+import { LayoutDashboard, Inbox, Settings, PanelLeftClose, PanelLeft, MessageSquare, Heart, Headphones, Wallet, Rss, LogOut } from 'lucide-react'
 
 function AppIcon({ className }: { className?: string }) {
   return (
@@ -50,9 +50,7 @@ const navItems = [
   { to: '/podcasts', label: 'Podcasts', icon: Headphones },
   { to: '/rss', label: 'RSS', icon: Rss },
   { to: '/depot', label: 'Depot', icon: Wallet },
-  { to: '/digests', label: 'Digests', icon: FileText },
   { to: '/settings', label: 'Settings', icon: Settings },
-  { to: '/logs', label: 'Logs', icon: ScrollText },
 ]
 
 export default function Layout() {

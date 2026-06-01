@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { api } from '../api/client'
 import { PageSpinner } from '../components/Spinner'
 import {
   Settings, Mail, Plus, TestTube, RefreshCw, Trash2,
-  Brain, Zap, Check, X, Forward, Tag, CloudSun, MessageSquare, HelpCircle, Watch, AlertCircle
+  Brain, Zap, Check, X, Forward, Tag, CloudSun, MessageSquare, HelpCircle, Watch, AlertCircle,
+  FileText, ScrollText
 } from 'lucide-react'
+
+const DigestsPage = lazy(() => import('./DigestsPage'))
+const LogsPage = lazy(() => import('./LogsPage'))
 import { formatDate } from '../lib/utils'
 
 interface MailAccount {
@@ -77,7 +81,7 @@ interface ClassificationRule {
 }
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'weather' | 'assistant' | 'garmin'>('accounts')
+  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'weather' | 'assistant' | 'garmin' | 'digests' | 'logs'>('accounts')
   const [accounts, setAccounts] = useState<MailAccount[]>([])
   const [rules, setRules] = useState<ClassificationRule[]>([])
   const [providers, setProviders] = useState<LlmProvider[]>([])
@@ -265,6 +269,8 @@ export default function SettingsPage() {
     { key: 'llm' as const, label: 'LLM Providers', icon: Brain },
     { key: 'assistant' as const, label: 'Assistant', icon: MessageSquare },
     { key: 'garmin' as const, label: 'Garmin', icon: Watch },
+    { key: 'digests' as const, label: 'Digests', icon: FileText },
+    { key: 'logs' as const, label: 'Logs', icon: ScrollText },
   ]
 
   return (
@@ -1332,6 +1338,14 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {tab === 'digests' && (
+        <Suspense fallback={<PageSpinner />}><DigestsPage /></Suspense>
+      )}
+
+      {tab === 'logs' && (
+        <Suspense fallback={<PageSpinner />}><LogsPage /></Suspense>
       )}
     </div>
   )

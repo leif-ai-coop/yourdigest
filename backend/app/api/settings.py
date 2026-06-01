@@ -1,6 +1,6 @@
 import json
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,18 +17,6 @@ router = APIRouter()
 async def list_settings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AppSetting))
     return result.scalars().all()
-
-
-@router.put("/{key}", response_model=MessageResponse)
-async def set_setting(key: str, value: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(AppSetting).where(AppSetting.key == key))
-    setting = result.scalar_one_or_none()
-    if setting:
-        setting.value = value
-    else:
-        setting = AppSetting(key=key, value=value)
-        db.add(setting)
-    return MessageResponse(message=f"Setting '{key}' updated")
 
 
 # --- Categories ---
@@ -156,18 +144,25 @@ async def set_assistant_settings(data: AssistantSettings, db: AsyncSession = Dep
 class PodcastSettings(BaseModel):
     transcription_model: str = ""
     summary_model: str = ""
+    digest_max_episodes: int = Field(default=10, ge=1, le=100)
 
 
 @router.get("/podcasts")
 async def get_podcast_settings(db: AsyncSession = Depends(get_db)):
     """Get global podcast AI settings."""
     settings = {}
-    for key in ["podcast_transcription_model", "podcast_summary_model"]:
+    for key in ["podcast_transcription_model", "podcast_summary_model", "podcast_digest_max_episodes"]:
         result = await db.execute(select(AppSetting).where(AppSetting.key == key))
         setting = result.scalar_one_or_none()
         if setting and setting.value:
             field = key.replace("podcast_", "")
-            settings[field] = setting.value
+            if field == "digest_max_episodes":
+                try:
+                    settings[field] = int(setting.value)
+                except ValueError:
+                    pass
+            else:
+                settings[field] = setting.value
     defaults = PodcastSettings()
     return {**defaults.model_dump(), **settings}
 
@@ -178,6 +173,7 @@ async def set_podcast_settings(data: PodcastSettings, db: AsyncSession = Depends
     for key, value in [
         ("podcast_transcription_model", data.transcription_model),
         ("podcast_summary_model", data.summary_model),
+        ("podcast_digest_max_episodes", str(data.digest_max_episodes)),
     ]:
         result = await db.execute(select(AppSetting).where(AppSetting.key == key))
         setting = result.scalar_one_or_none()
@@ -200,3 +196,18 @@ async def reset_feed_models(db: AsyncSession = Depends(get_db)):
             feed.summary_model = None
             count += 1
     return MessageResponse(message=f"{count} feeds reset to global defaults")
+
+
+# Generic single-key setter. MUST stay last: a `/{key}` path param matches any
+# single segment and would otherwise shadow the specific PUT routes above
+# (/podcasts, /assistant, /categories, /digest-thresholds).
+@router.put("/{key}", response_model=MessageResponse)
+async def set_setting(key: str, value: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+    else:
+        setting = AppSetting(key=key, value=value)
+        db.add(setting)
+    return MessageResponse(message=f"Setting '{key}' updated")

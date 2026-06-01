@@ -21,12 +21,13 @@ def build_classify_prompt(categories: dict[str, str] | None = None) -> str:
     """Build classification system prompt from category definitions."""
     cats = categories or DEFAULT_CATEGORIES
     cat_lines = "\n".join(f"- {k}: {v}" for k, v in cats.items())
-    return f"""You are an email classification assistant. Classify the given email into one of these categories:
+    return f"""You are an email classification assistant. Classify the given email using these categories:
 {cat_lines}
 
+An email may belong to MULTIPLE categories at once (e.g. an invoice that is also a shipping confirmation). Assign every category that genuinely applies, ordered from most to least relevant. Only assign multiple when the email truly fits several — when in doubt, return a single category.
+
 Respond in JSON format with these fields:
-- category: one of the categories above
-- confidence: float 0-1
+- categories: array of applicable categories, most relevant first. Each entry: {{"category": "<one of the categories above>", "confidence": <float 0-1>}}. Always include at least one entry.
 - priority: int 0-5 (5 = highest)
 - summary: brief 1-2 sentence summary
 - action_required: boolean

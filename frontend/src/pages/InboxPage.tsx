@@ -221,7 +221,7 @@ export default function InboxPage() {
   const handleClassify = async (messageId: string) => {
     setClassifying(true)
     try {
-      await api.post<Classification>(`/classification/classify/${messageId}`)
+      await api.post<Classification[]>(`/classification/classify/${messageId}`)
       const detail = await api.get<MailMessage>(`/mail/messages/${messageId}`)
       setSelected(detail)
     } finally {

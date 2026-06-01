@@ -223,13 +223,30 @@ async def send_podcast_mail(
 
 def render_podcast_digest_section(
     episodes: list[tuple[PodcastEpisode, PodcastArtifact, str | None]],
+    max_episodes: int = 10,
 ) -> str:
-    """Render podcast summaries as a digest section (compact format)."""
+    """Render podcast summaries as a digest section (compact format).
+
+    Renders at most max_episodes (sorted newest-first by the caller). Any
+    overflow is logged explicitly with the dropped episode titles so silent
+    truncation never happens.
+    """
     if not episodes:
         return ""
 
+    if len(episodes) > max_episodes:
+        dropped = episodes[max_episodes:]
+        dropped_titles = ", ".join(
+            f"{(ep.title or 'Ohne Titel')[:60]} ({feed or '?'})"
+            for ep, _art, feed in dropped
+        )
+        logger.warning(
+            "Podcast digest cap (%d) exceeded: %d ready, %d not included: %s",
+            max_episodes, len(episodes), len(dropped), dropped_titles,
+        )
+
     items_html = []
-    for episode, artifact, feed_title in episodes[:10]:  # Max 10 in digest
+    for episode, artifact, feed_title in episodes[:max_episodes]:
         ep_title = html.escape(episode.title or "Ohne Titel")
         feed_name = html.escape(feed_title or "")
         date_str = episode.published_at.strftime("%d.%m.") if episode.published_at else ""

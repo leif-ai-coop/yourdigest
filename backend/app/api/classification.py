@@ -56,13 +56,13 @@ async def get_message_classifications(message_id: uuid.UUID, db: AsyncSession = 
     result = await db.execute(
         select(MailClassification)
         .where(MailClassification.message_id == message_id)
-        .order_by(desc(MailClassification.created_at))
+        .order_by(desc(MailClassification.confidence), desc(MailClassification.created_at))
     )
     return result.scalars().all()
 
 
-@router.post("/classify/{message_id}", response_model=ClassificationOut)
+@router.post("/classify/{message_id}", response_model=list[ClassificationOut])
 async def classify_message(message_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     from app.services.classification_service import classify_message as do_classify
-    classification = await do_classify(db, message_id)
-    return classification
+    classifications = await do_classify(db, message_id)
+    return classifications

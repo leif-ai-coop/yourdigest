@@ -106,15 +106,18 @@ async def collect_mail_items(
 
     items = []
     for msg in messages:
-        # Classification is eager-loaded above — no per-mail query (invariant: 0 or 1).
+        # Classifications are eager-loaded above (no per-mail query). A mail can
+        # have multiple categories, ordered by confidence desc -> [0] = primary.
         classification = msg.classifications[0] if msg.classifications else None
         category = classification.category if classification else "uncategorized"
+        all_categories = [c.category for c in msg.classifications] or ["uncategorized"]
 
+        # Filter on the FULL category set (match-any), but group/display by primary.
         if policy.include_categories:
-            if category not in policy.include_categories:
+            if not any(c in policy.include_categories for c in all_categories):
                 continue
         if policy.exclude_categories:
-            if category in policy.exclude_categories:
+            if any(c in policy.exclude_categories for c in all_categories):
                 continue
 
         # Extract unsubscribe links from mail links
@@ -139,6 +142,7 @@ async def collect_mail_items(
             "subject": msg.subject or "(no subject)",
             "date": str(msg.date),
             "category": category,
+            "categories": all_categories,
             "priority": classification.priority if classification else 0,
             "summary": classification.summary if classification else None,
             "action_required": classification.action_required if classification else False,
@@ -203,6 +207,21 @@ async def get_digest_thresholds(db: AsyncSession) -> tuple[int, int]:
             except ValueError:
                 pass
     return detail, compact
+
+
+async def get_podcast_digest_max(db: AsyncSession, default: int = 10) -> int:
+    """Max number of podcast episodes rendered per digest (global setting)."""
+    from app.models.audit import AppSetting
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "podcast_digest_max_episodes")
+    )
+    setting = result.scalars().first()
+    if setting and setting.value:
+        try:
+            return max(1, int(setting.value))
+        except ValueError:
+            pass
+    return default
 
 
 INBOX_BASE_URL = "https://assistant.curaos.de"
@@ -1525,8 +1544,10 @@ async def compose_digest(
 
         # Collect podcast summaries
         podcast_episodes = []
+        podcast_max = 10
         if policy.include_podcasts:
             podcast_episodes = await get_ready_episodes(db, since=since)
+            podcast_max = await get_podcast_digest_max(db)
 
         # Collect depot data
         depot_data = None
@@ -1590,7 +1611,7 @@ async def compose_digest(
         if podcast_episodes:
             db.add(DigestSection(
                 run_id=run.id, section_type="podcast", title="Podcasts",
-                content=render_podcast_digest_section(podcast_episodes), order=order,
+                content=render_podcast_digest_section(podcast_episodes, podcast_max), order=order,
                 metadata_json={"count": len(podcast_episodes)},
             ))
             order += 1
@@ -1612,7 +1633,7 @@ async def compose_digest(
             "mail": render_mail_section(mail_items, detail_threshold, compact_threshold),
             "feeds": render_feed_section(feed_items) if feed_items else "",
             "unsubscribe": render_unsubscribe_section(mail_items),
-            "podcasts": render_podcast_digest_section(podcast_episodes) if podcast_episodes else "",
+            "podcasts": render_podcast_digest_section(podcast_episodes, podcast_max) if podcast_episodes else "",
             "depot": render_depot_section(depot_data, depot_ai_summary, policy.depot_top_n or 10) if depot_data else "",
         }
         if ai_summary:

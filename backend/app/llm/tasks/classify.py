@@ -11,8 +11,47 @@ from app.llm.prompt_registry import get_prompt
 logger = logging.getLogger(__name__)
 
 
-async def classify_with_llm(db: AsyncSession, message: MailMessage) -> MailClassification:
-    """Classify an email message using LLM."""
+def _parse_categories(data: dict) -> list[tuple[str, float]]:
+    """Normalize the LLM response into an ordered list of (category, confidence).
+
+    Accepts the new ``categories`` array (list of dicts or strings) and falls
+    back to the legacy single ``category`` field. Dedups case-insensitively
+    while preserving the (relevance) order, dropping empty names.
+    """
+    raw = data.get("categories")
+    pairs: list[tuple[str, float]] = []
+    top_conf = float(data.get("confidence", 0.0) or 0.0)
+    if isinstance(raw, list) and raw:
+        for entry in raw:
+            if isinstance(entry, dict):
+                cat = (entry.get("category") or "").strip()
+                conf = entry.get("confidence", top_conf)
+            elif isinstance(entry, str):
+                cat, conf = entry.strip(), top_conf
+            else:
+                continue
+            if cat:
+                try:
+                    pairs.append((cat, float(conf)))
+                except (TypeError, ValueError):
+                    pairs.append((cat, top_conf))
+    if not pairs:
+        cat = (data.get("category") or "unknown").strip() or "unknown"
+        pairs.append((cat, top_conf))
+
+    seen: set[str] = set()
+    deduped: list[tuple[str, float]] = []
+    for cat, conf in pairs:
+        key = cat.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((cat, conf))
+    return deduped
+
+
+async def classify_with_llm(db: AsyncSession, message: MailMessage) -> list[MailClassification]:
+    """Classify an email message using LLM. Returns one row per category."""
     provider = get_llm_provider()
     system_prompt, user_template = await get_prompt(db, "classify")
 
@@ -49,38 +88,37 @@ async def classify_with_llm(db: AsyncSession, message: MailMessage) -> MailClass
             message.tracking_codes = tracking
             logger.info(f"LLM found {len(tracking)} tracking codes in message {message.id}")
 
-    # Check for existing classification — update instead of duplicate
-    from sqlalchemy import select
-    existing_result = await db.execute(
-        select(MailClassification).where(MailClassification.message_id == message.id).limit(1)
+    # A mail can have multiple categories -> one row per category. Replace all
+    # existing rows for this message (re-classify is idempotent). Mail-level
+    # fields (priority, summary, ...) are duplicated onto each row so any
+    # consumer reading a single row gets sensible data.
+    from sqlalchemy import delete
+    categories = _parse_categories(data)
+    await db.execute(
+        delete(MailClassification).where(MailClassification.message_id == message.id)
     )
-    classification = existing_result.scalar_one_or_none()
-    if classification:
-        classification.category = data.get("category", "unknown")
-        classification.confidence = data.get("confidence", 0.0)
-        classification.priority = data.get("priority", 0)
-        classification.summary = data.get("summary")
-        classification.action_required = data.get("action_required", False)
-        classification.due_date = data.get("due_date")
-        classification.tags = data.get("tags")
-        classification.classified_by = "llm"
-        classification.llm_model = result.get("model")
-        classification.raw_llm_response = result.get("content")
-    else:
-        classification = MailClassification(
+
+    shared = dict(
+        priority=data.get("priority", 0),
+        summary=data.get("summary"),
+        action_required=data.get("action_required", False),
+        due_date=data.get("due_date"),
+        tags=data.get("tags"),
+        classified_by="llm",
+        llm_model=result.get("model"),
+        raw_llm_response=result.get("content"),
+    )
+    classifications = []
+    for category, confidence in categories:
+        obj = MailClassification(
             message_id=message.id,
-            category=data.get("category", "unknown"),
-            confidence=data.get("confidence", 0.0),
-            priority=data.get("priority", 0),
-            summary=data.get("summary"),
-            action_required=data.get("action_required", False),
-            due_date=data.get("due_date"),
-            tags=data.get("tags"),
-            classified_by="llm",
-            llm_model=result.get("model"),
-            raw_llm_response=result.get("content"),
+            category=category,
+            confidence=confidence,
+            **shared,
         )
-        db.add(classification)
+        db.add(obj)
+        classifications.append(obj)
     await db.flush()
-    await db.refresh(classification)
-    return classification
+    for obj in classifications:
+        await db.refresh(obj)
+    return classifications

@@ -238,7 +238,7 @@ export default function PodcastsPage() {
   const [processing, setProcessing] = useState<Set<string>>(new Set())
   const [feedSidebarOpen, setFeedSidebarOpen] = useState(true)
   const detailRef = useRef<HTMLDivElement>(null)
-  const [globalSettings, setGlobalSettings] = useState<{ transcription_model: string; summary_model: string }>({ transcription_model: '', summary_model: '' })
+  const [globalSettings, setGlobalSettings] = useState<{ transcription_model: string; summary_model: string; digest_max_episodes: number }>({ transcription_model: '', summary_model: '', digest_max_episodes: 10 })
   const [globalModels, setGlobalModels] = useState<{ id: string }[]>([])
   const [globalAppDefault, setGlobalAppDefault] = useState('')
   // Mobile: show detail instead of list
@@ -305,7 +305,7 @@ export default function PodcastsPage() {
 
   const loadGlobalSettings = useCallback(async () => {
     const [settings, models, active] = await Promise.all([
-      api.get<{ transcription_model: string; summary_model: string }>('/settings/podcasts'),
+      api.get<{ transcription_model: string; summary_model: string; digest_max_episodes: number }>('/settings/podcasts'),
       api.get<{ id: string }[]>('/llm/models'),
       api.get<{ model: string }>('/llm/active-model'),
     ])
@@ -1281,10 +1281,10 @@ function PolicyForm({ policy, feeds, prompts, onSave, onCancel }: {
 }
 
 function PodcastGlobalSettings({ settings, models, appDefault, onSave, onResetFeeds }: {
-  settings: { transcription_model: string; summary_model: string }
+  settings: { transcription_model: string; summary_model: string; digest_max_episodes: number }
   models: { id: string }[]
   appDefault: string
-  onSave: (data: { transcription_model: string; summary_model: string }) => Promise<void>
+  onSave: (data: { transcription_model: string; summary_model: string; digest_max_episodes: number }) => Promise<void>
   onResetFeeds: () => Promise<void>
 }) {
   const [form, setForm] = useState(settings)
@@ -1320,6 +1320,23 @@ function PodcastGlobalSettings({ settings, models, appDefault, onSave, onResetFe
             models={models}
             appDefault={appDefault}
           />
+        </div>
+        <div className="mt-6">
+          <label className="block text-sm font-medium mb-1">Digest-Limit</label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Maximale Anzahl Podcast-Zusammenfassungen, die pro Digest-Mail gerendert werden (neueste zuerst). Darueber hinausgehende werden im API-Log vermerkt.
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={form.digest_max_episodes}
+              onChange={e => setForm({...form, digest_max_episodes: Math.max(1, Math.min(100, Number(e.target.value) || 1))})}
+              className="w-24 px-3 py-2 text-sm bg-background border border-border rounded-md"
+            />
+            <span className="text-xs text-muted-foreground">Episoden pro Digest</span>
+          </div>
         </div>
         <div className="flex items-center gap-3 mt-4">
           <button onClick={handleSave} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md">

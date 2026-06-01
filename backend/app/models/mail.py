@@ -57,7 +57,14 @@ class MailMessage(Base, UUIDMixin, TimestampMixin):
 
     attachments: Mapped[list["MailAttachment"]] = relationship(back_populates="message", cascade="all, delete-orphan")
     links: Mapped[list["MailLink"]] = relationship(back_populates="message", cascade="all, delete-orphan")
-    classifications: Mapped[list["MailClassification"]] = relationship(back_populates="message", cascade="all, delete-orphan")
+    # Ordered by confidence desc so classifications[0] is the primary (most
+    # relevant) category. A mail can carry multiple categories; the LLM/rule
+    # classifier writes them in descending-confidence order.
+    classifications: Mapped[list["MailClassification"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        order_by="desc(MailClassification.confidence)",
+    )
 
     account: Mapped["MailAccount"] = relationship()
 

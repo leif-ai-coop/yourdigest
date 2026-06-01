@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 
 from app.config import get_settings
 from app.dependencies import get_current_user
-from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts, depot
+from app.api import health, connectors, audit, mail, classification, forwarding, digest, feeds, weather, llm, assistant, settings as settings_api, garmin, podcasts, depot, dashboard
 
 
 @asynccontextmanager
@@ -88,3 +88,4 @@ app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"
 app.include_router(garmin.router, prefix="/api/garmin", tags=["garmin"], dependencies=auth)
 app.include_router(podcasts.router, prefix="/api/podcasts", tags=["podcasts"], dependencies=auth)
 app.include_router(depot.router, prefix="/api/depot", tags=["depot"], dependencies=auth)
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=auth)

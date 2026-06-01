@@ -105,7 +105,12 @@ async def list_episodes(
 
     if feed_id:
         query = query.where(PodcastEpisode.feed_id == feed_id)
-    if status:
+    if status == "active":
+        # In-progress (download/chunk/transcribe/summarize) — multiple statuses.
+        query = query.where(PodcastEpisode.processing_status.in_(
+            ["downloading", "chunking", "transcribing", "summarizing", "summarizing_chunks", "reducing"]
+        ))
+    elif status:
         query = query.where(PodcastEpisode.processing_status == status)
     if discovery:
         query = query.where(PodcastEpisode.discovery_status == discovery)

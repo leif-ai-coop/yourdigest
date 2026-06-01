@@ -1,12 +1,13 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Suspense, lazy } from 'react'
 import Layout from './components/Layout'
-import InboxPage from './pages/InboxPage'
 import { PageSpinner } from './components/Spinner'
 
-// Inbox is the landing route → keep it eager. Everything else (incl. the
-// Recharts-heavy Health/Depot pages) is split into its own chunk and loaded
-// on demand, so the initial bundle stays small.
+// Dashboard is the landing route. Every page is lazy-split into its own chunk
+// (incl. the Recharts-heavy Dashboard/Health/Depot pages), so the initial
+// bundle stays small and recharts loads on demand.
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const InboxPage = lazy(() => import('./pages/InboxPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const DigestsPage = lazy(() => import('./pages/DigestsPage'))
 const LogsPage = lazy(() => import('./pages/LogsPage'))
@@ -21,7 +22,8 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<InboxPage />} />
+          <Route path="/" element={<Suspense fallback={<PageSpinner />}><DashboardPage /></Suspense>} />
+          <Route path="/inbox" element={<Suspense fallback={<PageSpinner />}><InboxPage /></Suspense>} />
           <Route path="/assistant" element={<Suspense fallback={<PageSpinner />}><AssistantPage /></Suspense>} />
           <Route path="/health" element={<Suspense fallback={<PageSpinner />}><HealthPage /></Suspense>} />
           <Route path="/podcasts" element={<Suspense fallback={<PageSpinner />}><PodcastsPage /></Suspense>} />

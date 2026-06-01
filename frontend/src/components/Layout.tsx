@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { Inbox, FileText, Settings, ScrollText, PanelLeftClose, PanelLeft, MessageSquare, Heart, Headphones, Wallet, Rss, LogOut } from 'lucide-react'
+import { LayoutDashboard, Inbox, FileText, Settings, ScrollText, PanelLeftClose, PanelLeft, MessageSquare, Heart, Headphones, Wallet, Rss, LogOut } from 'lucide-react'
 
 function AppIcon({ className }: { className?: string }) {
   return (
@@ -43,7 +43,8 @@ function AppIcon({ className }: { className?: string }) {
 }
 
 const navItems = [
-  { to: '/', label: 'Inbox', icon: Inbox },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/inbox', label: 'Inbox', icon: Inbox },
   { to: '/assistant', label: 'Assistant', icon: MessageSquare },
   { to: '/health', label: 'Health', icon: Heart },
   { to: '/podcasts', label: 'Podcasts', icon: Headphones },
@@ -58,7 +59,7 @@ export default function Layout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Full-Bleed-Routen (eigene Zwei-Spalten-Layouts, volle Hoehe, kein Padding)
-  const fullBleed = location.pathname === '/' || location.pathname === '/assistant'
+  const fullBleed = location.pathname === '/inbox' || location.pathname === '/assistant'
 
 
   return (

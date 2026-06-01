@@ -107,6 +107,8 @@ export default function InboxPage() {
   const [syncing, setSyncing] = useState(false)
   const [classifying, setClassifying] = useState(false)
   const [filter, setFilter] = useState<'all' | 'unread' | 'flagged'>('all')
+  const [category, setCategory] = useState<string>(searchParams.get('category') || '')
+  const [categories, setCategories] = useState<string[]>([])
   const [showArchived, setShowArchived] = useState(false)
   const [folders, setFolders] = useState<{ folder: string; count: number }[]>([])
   const [activeFolder, setActiveFolder] = useState('INBOX')
@@ -130,6 +132,7 @@ export default function InboxPage() {
       if (!showArchived) url += '&is_archived=false'
       if (filter === 'unread') url += '&is_read=false'
       if (filter === 'flagged') url += '&is_flagged=true'
+      if (category) url += `&category=${encodeURIComponent(category)}`
       const data = await api.get<MailMessage[]>(url)
       setMessages(data)
     } catch (e) {
@@ -137,12 +140,13 @@ export default function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, showArchived, activeFolder, page])
+  }, [filter, category, showArchived, activeFolder, page])
 
   useEffect(() => { loadMessages() }, [loadMessages])
 
   useEffect(() => {
     api.get<{ folder: string; count: number }[]>('/mail/folders').then(setFolders).catch(() => {})
+    api.get<Record<string, string>>('/settings/categories').then(c => setCategories(Object.keys(c))).catch(() => {})
   }, [])
 
   // Deep-link: open mail directly from ?msg=ID (hide mail list)
@@ -331,6 +335,19 @@ export default function InboxPage() {
                 {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Flagged'}
               </button>
             ))}
+            <select
+              value={category}
+              onChange={e => {
+                const v = e.target.value
+                setCategory(v); setPage(1)
+                setSearchParams(v ? { category: v } : {}, { replace: true })
+              }}
+              className={`ml-1 px-2 py-1 text-xs rounded-md bg-secondary border border-border ${category ? 'text-primary' : 'text-muted-foreground'}`}
+              title="Nach Kategorie filtern"
+            >
+              <option value="">Alle Kategorien</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div className="flex items-center gap-1">
             <button

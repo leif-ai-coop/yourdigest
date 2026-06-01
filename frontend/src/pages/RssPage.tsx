@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Markdown from 'react-markdown'
 import { api } from '../api/client'
 import { PageSpinner } from '../components/Spinner'
@@ -187,6 +188,14 @@ export default function RssPage() {
       setItems(prev => prev.map(it => it.id === id ? { ...it, is_read: true } : it))
     }
   }
+
+  // Deep-link from the dashboard: /rss?item=<id> opens that item.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const it = searchParams.get('item')
+    if (it) { setTab('items'); openItem(it).catch(() => {}) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   const summarizeSelected = async () => {
     if (!selected) return

@@ -162,6 +162,7 @@ async def fetch_weather(db: AsyncSession, source: WeatherSource) -> WeatherSnaps
                 "weather_code": current.get("weather_code", 0),
                 "weather_desc": get_weather_description(current.get("weather_code", 0)),
                 "icon_type": get_weather_icon_type(current.get("weather_code", 0)),
+                "uv_index": (daily.get("uv_index_max") or [None])[0],
             },
             "today_periods": periods,
             "forecast": forecast_days,

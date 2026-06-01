@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Markdown from 'react-markdown'
 import { api } from '../api/client'
 import { PageSpinner } from '../components/Spinner'
@@ -228,7 +229,7 @@ export default function PodcastsPage() {
   const [editingPrompt, setEditingPrompt] = useState<PodcastPrompt | null>(null)
   const [editingPolicy, setEditingPolicy] = useState<PodcastMailPolicy | null>(null)
   const [editingFeed, setEditingFeed] = useState<PodcastFeed | null>(null)
-  const [episodeFilter, setEpisodeFilter] = useState<'all' | 'saved' | 'done' | 'error' | 'skipped'>('all')
+  const [episodeFilter, setEpisodeFilter] = useState<'all' | 'saved' | 'done' | 'active' | 'error' | 'skipped'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchFields, setSearchFields] = useState<Set<string>>(new Set(['title', 'description', 'summary', 'transcript']))
   const [showSearchSettings, setShowSearchSettings] = useState(false)
@@ -258,6 +259,7 @@ export default function PodcastsPage() {
     if (feedId) path += `&feed_id=${feedId}`
     if (episodeFilter === 'saved') path += '&saved_only=true'
     if (episodeFilter === 'done') path += '&status=done'
+    if (episodeFilter === 'active') path += '&status=active'
     if (episodeFilter === 'error') path += '&status=error'
     if (episodeFilter === 'skipped') path += '&discovery=skipped'
     const q = search ?? searchQuery
@@ -268,6 +270,11 @@ export default function PodcastsPage() {
     const data = await api.get<PodcastEpisode[]>(path)
     setEpisodes(data)
   }, [episodeFilter])
+
+  // Polling captures loadEpisodes once (deps []), so route it through a ref that
+  // always points at the latest loadEpisodes -> the current filter is respected.
+  const loadEpisodesRef = useRef(loadEpisodes)
+  useEffect(() => { loadEpisodesRef.current = loadEpisodes }, [loadEpisodes])
 
   const loadEpisodeDetail = useCallback(async (id: string) => {
     const data = await api.get<EpisodeDetail>(`/podcasts/episodes/${id}`)
@@ -323,6 +330,13 @@ export default function PodcastsPage() {
     }
     init()
   }, [])
+
+  // Deep-link from the dashboard: /podcasts?episode=<id> opens that episode.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const ep = searchParams.get('episode')
+    if (ep) { setTab('episodes'); loadEpisodeDetail(ep).catch(() => {}) }
+  }, [searchParams, loadEpisodeDetail])
 
   useEffect(() => {
     loadEpisodes(selectedFeed)
@@ -414,7 +428,7 @@ export default function PodcastsPage() {
     pollingRef.current = true
     const poll = async () => {
       try {
-        try { await loadEpisodes(selectedFeedRef.current) } catch {}
+        try { await loadEpisodesRef.current(selectedFeedRef.current) } catch {}
         try { await loadQueue() } catch {}
         // Check each tracked episode
         const stillActive = new Set<string>()
@@ -662,7 +676,7 @@ export default function PodcastsPage() {
               </button>
               {/* Filter — fixed */}
               <div className="flex gap-1 pb-2 overflow-x-auto flex-shrink-0">
-                {(['all', 'saved', 'done', 'skipped', 'error'] as const).map(f => (
+                {(['all', 'saved', 'done', 'active', 'skipped', 'error'] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setEpisodeFilter(f)}
@@ -670,7 +684,7 @@ export default function PodcastsPage() {
                       episodeFilter === f ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-secondary'
                     }`}
                   >
-                    {{ all: 'Alle', saved: 'Gemerkt', done: 'Fertig', skipped: 'Uebersprungen', error: 'Fehler' }[f]}
+                    {{ all: 'Alle', saved: 'Gemerkt', done: 'Fertig', active: 'Aktiv', skipped: 'Uebersprungen', error: 'Fehler' }[f]}
                   </button>
                 ))}
               </div>

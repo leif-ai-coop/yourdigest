@@ -206,6 +206,7 @@ async def list_messages(
     is_read: bool | None = None,
     is_archived: bool | None = None,
     is_flagged: bool | None = None,
+    category: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -232,6 +233,11 @@ async def list_messages(
         query = query.where(MailMessage.is_archived == is_archived)
     if is_flagged is not None:
         query = query.where(MailMessage.is_flagged == is_flagged)
+    if category:
+        from app.models.classification import MailClassification
+        query = query.where(MailMessage.id.in_(
+            select(MailClassification.message_id).where(MailClassification.category == category)
+        ))
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     return [_add_unsubscribe(msg) for msg in result.scalars().all()]

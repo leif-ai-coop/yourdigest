@@ -341,7 +341,7 @@ INBOX_BASE_URL = "https://assistant.curaos.de"
 
 def _inbox_link(item: dict) -> str:
     """Generate a link to the mail in the inbox."""
-    return f'{INBOX_BASE_URL}/?msg={item["id"]}'
+    return f'{INBOX_BASE_URL}/inbox?msg={item["id"]}'
 
 
 def _unsub_link_html(item: dict) -> str:
@@ -541,7 +541,7 @@ def render_events_section(items: list[dict]) -> str:
 
         title = item["subject"]
         cal_url = _google_calendar_url(title, item["due_date"], all_day=not has_time)
-        inbox_url = f'{INBOX_BASE_URL}/?msg={item["id"]}'
+        inbox_url = f'{INBOX_BASE_URL}/inbox?msg={item["id"]}'
 
         rows += f"""
       <tr>
@@ -880,7 +880,7 @@ async def generate_ai_summary(
             items_text += f"From: {item['from']}\n"
             items_text += f"Subject: {item['subject']}\n"
             items_text += f"Date: {item['date']}\n"
-            items_text += f"Inbox Link: {INBOX_BASE_URL}/?msg={item['id']}\n"
+            items_text += f"Inbox Link: {INBOX_BASE_URL}/inbox?msg={item['id']}\n"
             if item.get("action_required"):
                 items_text += "⚠ ACTION REQUIRED\n"
             if item.get("priority", 0) >= 3:

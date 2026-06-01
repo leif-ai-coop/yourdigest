@@ -53,11 +53,16 @@ async def fetch_quote(client: httpx.AsyncClient, symbol: str) -> dict | None:
         result = resp.json().get("chart", {}).get("result")
         if not result:
             return None
-        meta = result[0].get("meta", {})
+        r0 = result[0]
+        meta = r0.get("meta", {})
         price = meta.get("regularMarketPrice")
-        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
         if price is None:
             return None
+        # Vortagsschluss aus der Tages-Schlusskursreihe (zweitletzter Schluss).
+        # Yahoos meta.chartPreviousClose ist unzuverlaessig (oft nicht der letzte
+        # Handelstag) -> falsche Tagesveraenderung. Die Reihe ist verlaesslich.
+        closes = [c for c in ((r0.get("indicators", {}).get("quote") or [{}])[0].get("close") or []) if c is not None]
+        prev = closes[-2] if len(closes) >= 2 else (meta.get("chartPreviousClose") or meta.get("previousClose"))
         day_change_pct = None
         if prev:
             try:

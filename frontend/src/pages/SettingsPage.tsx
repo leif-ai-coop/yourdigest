@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import { PageSpinner } from '../components/Spinner'
 import {
   Settings, Mail, Plus, TestTube, RefreshCw, Trash2,
-  Brain, Zap, Check, X, Forward, Tag, Rss, CloudSun, MessageSquare, HelpCircle, Watch, AlertCircle
+  Brain, Zap, Check, X, Forward, Tag, CloudSun, MessageSquare, HelpCircle, Watch, AlertCircle
 } from 'lucide-react'
 import { formatDate } from '../lib/utils'
 
@@ -77,7 +77,7 @@ interface ClassificationRule {
 }
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'feeds' | 'weather' | 'assistant' | 'garmin'>('accounts')
+  const [tab, setTab] = useState<'accounts' | 'rules' | 'categories' | 'forwarding' | 'llm' | 'weather' | 'assistant' | 'garmin'>('accounts')
   const [accounts, setAccounts] = useState<MailAccount[]>([])
   const [rules, setRules] = useState<ClassificationRule[]>([])
   const [providers, setProviders] = useState<LlmProvider[]>([])
@@ -121,10 +121,6 @@ export default function SettingsPage() {
   const [activeModel, setActiveModel] = useState('')
   const [modelSearch, setModelSearch] = useState('')
   const [modelsLoaded, setModelsLoaded] = useState(false)
-  const [feeds, setFeeds] = useState<any[]>([])
-  const [showAddFeed, setShowAddFeed] = useState(false)
-  const [feedForm, setFeedForm] = useState({ url: '', title: '' })
-  const [syncingFeed, setSyncingFeed] = useState<string | null>(null)
   const [weatherSources, setWeatherSources] = useState<any[]>([])
   const [showAddWeather, setShowAddWeather] = useState(false)
   const [weatherForm, setWeatherForm] = useState({ name: '', latitude: '', longitude: '' })
@@ -149,10 +145,9 @@ export default function SettingsPage() {
       api.get<Record<string, string>>('/settings/categories'),
       api.get<{ detail_threshold: number; compact_threshold: number }>('/settings/digest-thresholds'),
       api.get<LlmPrompt[]>('/llm/prompts'),
-      api.get<any[]>('/feeds/'),
       api.get<any[]>('/weather/sources'),
       api.get<{ browse_days: number; browse_limit: number; body_max_chars: number }>('/settings/assistant'),
-    ]).then(([a, r, p, fp, fl, cats, thr, pr, fd, ws, as_]) => {
+    ]).then(([a, r, p, fp, fl, cats, thr, pr, ws, as_]) => {
       setAccounts(a)
       setRules(r)
       setProviders(p)
@@ -161,7 +156,6 @@ export default function SettingsPage() {
       setCategories(cats)
       setThresholds(thr)
       setPrompts(pr)
-      setFeeds(fd)
       setWeatherSources(ws)
       setAssistantSettings(as_)
     }).finally(() => setLoading(false))
@@ -267,7 +261,6 @@ export default function SettingsPage() {
     { key: 'rules' as const, label: 'Classification Rules', icon: Zap },
     { key: 'categories' as const, label: 'Categories', icon: Tag },
     { key: 'forwarding' as const, label: 'Forwarding', icon: Forward },
-    { key: 'feeds' as const, label: 'RSS Feeds', icon: Rss },
     { key: 'weather' as const, label: 'Weather', icon: CloudSun },
     { key: 'llm' as const, label: 'LLM Providers', icon: Brain },
     { key: 'assistant' as const, label: 'Assistant', icon: MessageSquare },
@@ -730,92 +723,6 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
-        </div>
-      )}
-
-      {/* RSS Feeds Tab */}
-      {tab === 'feeds' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">RSS Feeds</h2>
-            <button onClick={() => setShowAddFeed(!showAddFeed)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90">
-              {showAddFeed ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-              {showAddFeed ? 'Cancel' : 'Add Feed'}
-            </button>
-          </div>
-
-          {showAddFeed && (
-            <form onSubmit={async (e) => {
-              e.preventDefault()
-              const f = await api.post<any>('/feeds/', { url: feedForm.url, title: feedForm.title || null })
-              setFeeds(prev => [...prev, f])
-              setShowAddFeed(false)
-              setFeedForm({ url: '', title: '' })
-            }} className="bg-card rounded-lg border border-border p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input placeholder="Feed URL" value={feedForm.url} onChange={e => setFeedForm({...feedForm, url: e.target.value})}
-                  className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" required />
-                <input placeholder="Title (optional — auto-detected)" value={feedForm.title} onChange={e => setFeedForm({...feedForm, title: e.target.value})}
-                  className="bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-              </div>
-              <button type="submit" className="mt-3 flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm">
-                <Check className="w-3.5 h-3.5" /> Add Feed
-              </button>
-            </form>
-          )}
-
-          {feeds.length === 0 && !showAddFeed ? (
-            <div className="text-center py-8 text-muted-foreground text-sm">No RSS feeds configured.</div>
-          ) : (
-            <div className="space-y-2">
-              {feeds.map((feed: any) => (
-                <div key={feed.id} className="bg-card rounded-lg border border-border p-4 flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Rss className="w-4 h-4 text-primary" />
-                      <span className="text-sm font-medium">{feed.title || feed.url}</span>
-                      <span className={`w-2 h-2 rounded-full ${feed.enabled ? 'bg-emerald-400' : 'bg-gray-500'}`} />
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1">{feed.url}</div>
-                    {feed.last_fetched_at && (
-                      <div className="text-xs text-muted-foreground mt-0.5">Last fetched: {formatDate(feed.last_fetched_at)}</div>
-                    )}
-                    {feed.last_error && (
-                      <div className="text-xs text-red-400 mt-0.5">{feed.last_error}</div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={async () => {
-                        setSyncingFeed(feed.id)
-                        try {
-                          const r = await api.post<any>(`/feeds/${feed.id}/sync`)
-                          alert(`Synced: ${r.new_items} new items`)
-                          const updated = await api.get<any[]>('/feeds/')
-                          setFeeds(updated)
-                        } finally { setSyncingFeed(null) }
-                      }}
-                      disabled={syncingFeed === feed.id}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${syncingFeed === feed.id ? 'animate-spin' : ''}`} />
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!confirm('Delete this feed?')) return
-                        await api.delete(`/feeds/${feed.id}`)
-                        setFeeds(prev => prev.filter((f: any) => f.id !== feed.id))
-                      }}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-red-400 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

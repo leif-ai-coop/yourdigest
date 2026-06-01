@@ -23,6 +23,9 @@ interface DigestPolicy {
   max_items: number
   include_weather: boolean
   include_feeds: boolean
+  feed_ai_briefing: boolean
+  feed_briefing_prompt: string | null
+  feed_ids: string[] | null
   enabled: boolean
   template: string
   digest_prompt: string | null
@@ -180,6 +183,10 @@ export default function DigestsPage() {
   const [editingSettings, setEditingSettings] = useState<string | null>(null)
   const [editWeather, setEditWeather] = useState(true)
   const [editFeeds, setEditFeeds] = useState(true)
+  const [editFeedBriefing, setEditFeedBriefing] = useState(false)
+  const [editFeedBriefingPrompt, setEditFeedBriefingPrompt] = useState('')
+  const [editFeedIds, setEditFeedIds] = useState<string[]>([])
+  const [allFeeds, setAllFeeds] = useState<{ id: string; title: string | null; url: string }[]>([])
   const [editSinceAny, setEditSinceAny] = useState(false)
   const [editTargetEmail, setEditTargetEmail] = useState('')
   const [editCron, setEditCron] = useState('')
@@ -252,11 +259,13 @@ export default function DigestsPage() {
       api.get<DigestPolicy[]>('/digest/policies'),
       api.get<DigestRun[]>('/digest/runs'),
       api.get<{ charts: HealthOption[]; data_types: HealthOption[] }>('/digest/health-options'),
-    ]).then(([p, r, ho]) => {
+      api.get<{ id: string; title: string | null; url: string }[]>('/feeds/'),
+    ]).then(([p, r, ho, fd]) => {
       setPolicies(p)
       setRuns(r)
       setHealthChartOptions(ho.charts)
       setHealthDataTypeOptions(ho.data_types)
+      setAllFeeds(fd)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -471,6 +480,9 @@ export default function DigestsPage() {
                           setEditingSettings(policy.id)
                           setEditWeather(policy.include_weather)
                           setEditFeeds(policy.include_feeds)
+                          setEditFeedBriefing(policy.feed_ai_briefing || false)
+                          setEditFeedBriefingPrompt(policy.feed_briefing_prompt || '')
+                          setEditFeedIds(policy.feed_ids || [])
                           setEditSinceAny(policy.since_last_any_digest || false)
                           setEditTargetEmail(policy.target_email || '')
                           setEditCron(policy.schedule_cron)
@@ -769,6 +781,50 @@ export default function DigestsPage() {
                       </div>
                     )}
 
+                    {editFeeds && (
+                      <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-3">
+                        <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                          <Rss className="w-3.5 h-3.5" /> RSS-Einstellungen
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="text-xs text-muted-foreground">Feeds in diesem Digest {editFeedIds.length === 0 ? '(alle)' : `(${editFeedIds.length} ausgewaehlt)`}</div>
+                            <button type="button" role="switch" aria-checked={editFeedBriefing}
+                              onClick={() => setEditFeedBriefing(v => !v)}
+                              title="Umschalten zwischen Roh-Liste und KI-Zusammenfassung"
+                              className="flex items-center gap-2 text-xs">
+                              <span className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${editFeedBriefing ? 'bg-primary' : 'bg-border'}`}>
+                                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${editFeedBriefing ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                              </span>
+                              <span className="text-muted-foreground">{editFeedBriefing ? 'KI-Zusammenfassung' : 'Roh-Liste'}</span>
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1.5 max-h-40 overflow-y-auto">
+                            {allFeeds.map(f => (
+                              <label key={f.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <input type="checkbox" checked={editFeedIds.includes(f.id)}
+                                  onChange={e => setEditFeedIds(prev => e.target.checked ? [...prev, f.id] : prev.filter(x => x !== f.id))}
+                                  className="rounded" />
+                                {f.title || f.url}
+                              </label>
+                            ))}
+                            {allFeeds.length === 0 && <span className="text-xs text-muted-foreground">Keine Feeds vorhanden.</span>}
+                          </div>
+                          {editFeedIds.length > 0 && (
+                            <button type="button" onClick={() => setEditFeedIds([])} className="mt-1.5 text-xs text-primary hover:underline">Auswahl loeschen (= alle Feeds)</button>
+                          )}
+                        </div>
+                        {editFeedBriefing && (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">Briefing-Prompt (leer = Feed-/Standard-Prompt)</label>
+                            <textarea rows={2} value={editFeedBriefingPrompt} onChange={e => setEditFeedBriefingPrompt(e.target.value)}
+                              placeholder="z.B. Fasse die neuen Artikel thematisch gruppiert in kurzen Stichpunkten zusammen."
+                              className="w-full bg-secondary border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Save / Cancel */}
                     <div className="flex items-center gap-2">
                       <button
@@ -778,6 +834,9 @@ export default function DigestsPage() {
                             target_email: editTargetEmail || null,
                             include_weather: editWeather,
                             include_feeds: editFeeds,
+                            feed_ai_briefing: editFeedBriefing,
+                            feed_briefing_prompt: editFeedBriefingPrompt || null,
+                            feed_ids: editFeedIds.length ? editFeedIds : null,
                             since_last_any_digest: editSinceAny,
                             max_tokens: editMaxTokens,
                             digest_prompt: editPromptText || null,

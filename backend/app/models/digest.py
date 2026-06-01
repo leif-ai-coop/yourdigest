@@ -18,6 +18,12 @@ class DigestPolicy(Base, UUIDMixin, TimestampMixin):
     max_items: Mapped[int] = mapped_column(Integer, default=50)
     include_weather: Mapped[bool] = mapped_column(default=True)
     include_feeds: Mapped[bool] = mapped_column(default=True)
+    # When True: render a per-feed AI briefing of the new items in the window
+    # (with article links) instead of the raw item list.
+    feed_ai_briefing: Mapped[bool] = mapped_column(default=False, server_default="false")
+    feed_briefing_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # List of RssFeed UUIDs to restrict this digest to. Null/empty = all feeds.
+    feed_ids: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     template: Mapped[str] = mapped_column(String(100), default="default")
     digest_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)

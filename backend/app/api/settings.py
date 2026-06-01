@@ -184,6 +184,41 @@ async def set_podcast_settings(data: PodcastSettings, db: AsyncSession = Depends
     return data.model_dump()
 
 
+class RssSettings(BaseModel):
+    item_summary_model: str = ""
+    briefing_model: str = ""
+
+
+@router.get("/rss")
+async def get_rss_settings(db: AsyncSession = Depends(get_db)):
+    """Get global RSS AI settings."""
+    settings = {}
+    for key in ["rss_item_summary_model", "rss_briefing_model"]:
+        result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting and setting.value:
+            field = key.replace("rss_", "")
+            settings[field] = setting.value
+    defaults = RssSettings()
+    return {**defaults.model_dump(), **settings}
+
+
+@router.put("/rss")
+async def set_rss_settings(data: RssSettings, db: AsyncSession = Depends(get_db)):
+    """Set global RSS AI settings."""
+    for key, value in [
+        ("rss_item_summary_model", data.item_summary_model),
+        ("rss_briefing_model", data.briefing_model),
+    ]:
+        result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = value
+        else:
+            db.add(AppSetting(key=key, value=value))
+    return data.model_dump()
+
+
 @router.post("/podcasts/reset-feeds", response_model=MessageResponse)
 async def reset_feed_models(db: AsyncSession = Depends(get_db)):
     """Reset all podcast feed models to global defaults (clear individual overrides)."""

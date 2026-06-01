@@ -78,6 +78,9 @@ async def fetch_feed(db: AsyncSession, feed: RssFeed) -> int:
                 content=content,
                 author=entry.get("author", "")[:200] if entry.get("author") else None,
                 published_at=published,
+                # Queue for AI summary if the feed has auto-summarize enabled;
+                # the rss_summary_job picks these up.
+                summary_status="pending" if feed.auto_summarize_items else "none",
             )
             db.add(item)
             new_count += 1

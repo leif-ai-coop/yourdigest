@@ -166,27 +166,139 @@ async def collect_weather_data(db: AsyncSession) -> dict | None:
     return {"data": snapshot.data, "summary": snapshot.summary, "fetched_at": str(snapshot.created_at)}
 
 
-async def collect_feed_items(db: AsyncSession, since: datetime, limit: int = 50) -> list[dict]:
-    """Collect recent RSS feed items."""
+def _normalize_feed_ids(feed_ids) -> list | None:
+    """Coerce a policy's feed_ids (list of str/UUID, or None) into UUIDs.
+    Returns None when no restriction applies (null/empty = all feeds)."""
+    if not feed_ids:
+        return None
+    import uuid as _uuid
+    out = []
+    for fid in feed_ids:
+        try:
+            out.append(fid if isinstance(fid, _uuid.UUID) else _uuid.UUID(str(fid)))
+        except (ValueError, TypeError):
+            continue
+    return out or None
+
+
+async def collect_feed_items(db: AsyncSession, since: datetime, limit: int = 50, feed_ids=None) -> list[dict]:
+    """Collect recent RSS feed items. Optionally restricted to feed_ids."""
     from app.models.feed import RssFeed
-    result = await db.execute(
+    query = (
         select(RssItem, RssFeed.title.label("feed_title"))
         .join(RssFeed, RssItem.feed_id == RssFeed.id)
         .where(RssItem.published_at >= since)
         .order_by(desc(RssItem.published_at))
         .limit(limit)
     )
+    fids = _normalize_feed_ids(feed_ids)
+    if fids:
+        query = query.where(RssItem.feed_id.in_(fids))
+    result = await db.execute(query)
     rows = result.all()
     return [
         {
             "title": item.title,
             "link": item.link,
-            "summary": item.summary[:200] if item.summary else None,
+            # Prefer the AI summary when available, else the raw feed snippet.
+            "summary": (item.ai_summary[:400] if item.ai_summary else (item.summary[:200] if item.summary else None)),
             "published": str(item.published_at),
             "source": feed_title or "RSS",
         }
         for item, feed_title in rows
     ]
+
+
+async def collect_feed_briefings(
+    db: AsyncSession,
+    since: datetime,
+    prompt_override: str | None = None,
+    model: str | None = None,
+    max_items_per_feed: int = 15,
+    feed_ids=None,
+) -> list[dict]:
+    """For each feed with NEW items in the digest window, generate an AI briefing
+    (markdown, with article links). Ephemeral — not stored. Optionally restricted
+    to feed_ids. Returns [{source, content, items:[{title, link}]}], one per feed."""
+    from app.models.feed import RssFeed, RssPrompt
+    from app.services.rss_summary_service import DEFAULT_BRIEFING_PROMPT, _resolve_model
+
+    query = (
+        select(RssItem, RssFeed)
+        .join(RssFeed, RssItem.feed_id == RssFeed.id)
+        .where(RssItem.published_at >= since)
+        .order_by(RssItem.feed_id, desc(RssItem.published_at))
+    )
+    fids = _normalize_feed_ids(feed_ids)
+    if fids:
+        query = query.where(RssItem.feed_id.in_(fids))
+    result = await db.execute(query)
+    by_feed: dict = {}
+    feed_objs: dict = {}
+    for item, feed in result.all():
+        by_feed.setdefault(feed.id, []).append(item)
+        feed_objs[feed.id] = feed
+
+    # Resolve the global default briefing prompt once (used when neither a policy
+    # override nor a feed-level prompt is configured).
+    default_prompt = None
+    if not prompt_override:
+        dp = await db.execute(
+            select(RssPrompt).where(
+                RssPrompt.prompt_type == "feed_briefing", RssPrompt.is_default == True
+            ).limit(1)
+        )
+        default_prompt = dp.scalar_one_or_none()
+
+    link_instruction = (
+        "\n\nVerlinke JEDEN erwaehnten Artikel als Markdown-Link [Titel](URL) mit den "
+        "exakt unten angegebenen URLs. Erfinde keine URLs. Nutze Markdown-Listen."
+    )
+
+    provider = get_llm_provider()
+    briefings: list[dict] = []
+    for fid, items in by_feed.items():
+        feed = feed_objs[fid]
+        items = items[:max_items_per_feed]
+
+        system = prompt_override
+        if not system and feed.briefing_prompt_id:
+            fp = await db.get(RssPrompt, feed.briefing_prompt_id)
+            if fp:
+                system = fp.system_prompt
+        if not system and default_prompt:
+            system = default_prompt.system_prompt
+        if not system:
+            system = DEFAULT_BRIEFING_PROMPT
+        system = system + link_instruction
+
+        blocks = []
+        for it in items:
+            body = it.content or it.summary or ""
+            body = (_html_to_text(body) if "<" in body else body).strip()[:1000]
+            blocks.append(f"### {it.title or 'Ohne Titel'}\nURL: {it.link or '(kein Link)'}\n{body}")
+        user = (
+            f"Feed: {feed.title or feed.url}\nNeue Artikel ({len(items)}):\n\n"
+            + "\n\n---\n\n".join(blocks)
+        )
+        # Model resolution per feed: explicit arg -> feed.summary_model override
+        # -> rss_briefing_model setting -> None (= global active model).
+        used_model = await _resolve_model(db, feed, model, "rss_briefing_model")
+        try:
+            res = await provider.chat(
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                model=used_model, temperature=0.3, max_tokens=2000,
+            )
+            content = (res.get("content") or "").strip()
+        except Exception as e:
+            logger.error(f"Feed briefing failed for '{feed.title or feed.url}': {e}")
+            content = ""
+        briefings.append({
+            "source": feed.title or "RSS",
+            "content": content,
+            "items": [{"title": it.title, "link": it.link} for it in items],
+        })
+    return briefings
 
 
 async def get_digest_thresholds(db: AsyncSession) -> tuple[int, int]:
@@ -669,6 +781,35 @@ def render_feed_section(feed_items: list[dict]) -> str:
       <h2>📰 {source}<span style="background:#1e3a5f;color:#5b9cf6;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">{len(items)}</span></h2>
     </div>
     <div style="padding:14px 18px">{rows}
+    </div>
+  </div>"""
+
+    return sections
+
+
+# Safe HTML subset for rendered AI briefing markdown (allows article links).
+_BRIEFING_TAGS = ["p", "br", "ul", "ol", "li", "strong", "em", "b", "i", "a",
+                  "h2", "h3", "h4", "blockquote", "code", "pre", "hr"]
+_BRIEFING_ATTRS = {"a": ["href", "title"]}
+
+
+def render_feed_briefing_section(briefings: list[dict]) -> str:
+    """Render per-feed AI briefings (markdown → sanitized HTML, links preserved)."""
+    sections = ""
+    for b in briefings:
+        content = b.get("content")
+        if not content:
+            continue
+        html_body = md.markdown(content, extensions=["nl2br"])
+        html_body = bleach.clean(html_body, tags=_BRIEFING_TAGS, attributes=_BRIEFING_ATTRS, strip=True)
+        # Open article links in a new tab + email-friendly link color.
+        html_body = html_body.replace('<a ', '<a target="_blank" rel="noopener" style="color:#5b9cf6;text-decoration:none" ')
+        sections += f"""
+  <div style="background:#151d30;border:1px solid #1e2d4a;border-radius:10px;margin-bottom:16px;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid #1e2d4a">
+      <h2>📰 {b['source']}<span style="background:#1e3a5f;color:#5b9cf6;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">{len(b.get('items', []))}</span></h2>
+    </div>
+    <div style="padding:14px 18px;font-size:13px;line-height:1.6;color:#a0aec0">{html_body}
     </div>
   </div>"""
 
@@ -1519,8 +1660,20 @@ async def compose_digest(
             if weather_data and weather_data.get("data") and isinstance(weather_data["data"], dict):
                 weather_ai_summary = await generate_weather_summary(db, weather_data["data"], policy.weather_prompt)
         feed_items = []
+        feed_briefings = None
         if policy.include_feeds:
-            feed_items = await collect_feed_items(db, since, limit=200)
+            policy_feed_ids = getattr(policy, "feed_ids", None)
+            feed_items = await collect_feed_items(db, since, limit=200, feed_ids=policy_feed_ids)
+            if getattr(policy, "feed_ai_briefing", False) and feed_items:
+                feed_briefings = await collect_feed_briefings(
+                    db, since, policy.feed_briefing_prompt, feed_ids=policy_feed_ids
+                )
+        # AI briefing (if enabled + produced content) replaces the raw item list.
+        feeds_html = (
+            render_feed_briefing_section(feed_briefings)
+            if feed_briefings and any(b.get("content") for b in feed_briefings)
+            else (render_feed_section(feed_items) if feed_items else "")
+        )
 
         # Collect health data
         health_data = {}
@@ -1596,8 +1749,8 @@ async def compose_digest(
         if feed_items:
             db.add(DigestSection(
                 run_id=run.id, section_type="feed", title="RSS Feeds",
-                content=render_feed_section(feed_items), order=order,
-                metadata_json={"count": len(feed_items)},
+                content=feeds_html, order=order,
+                metadata_json={"count": len(feed_items), "briefing": bool(feed_briefings)},
             ))
             order += 1
 
@@ -1631,7 +1784,7 @@ async def compose_digest(
             "ai_overview": "",
             "health": render_health_section(health_data, policy.health_charts or [], health_ai_summary) if health_data and policy.health_charts else "",
             "mail": render_mail_section(mail_items, detail_threshold, compact_threshold),
-            "feeds": render_feed_section(feed_items) if feed_items else "",
+            "feeds": feeds_html,
             "unsubscribe": render_unsubscribe_section(mail_items),
             "podcasts": render_podcast_digest_section(podcast_episodes, podcast_max) if podcast_episodes else "",
             "depot": render_depot_section(depot_data, depot_ai_summary, policy.depot_top_n or 10) if depot_data else "",

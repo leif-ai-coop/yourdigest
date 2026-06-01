@@ -4,7 +4,7 @@ from app.models.mail import MailAccount, MailMessage, MailAttachment, MailLink
 from app.models.classification import ClassificationRule, MailClassification
 from app.models.forwarding import ForwardingPolicy, ForwardingWhitelist, ForwardingLog
 from app.models.digest import DigestPolicy, DigestRun, DigestSection
-from app.models.feed import RssFeed, RssItem
+from app.models.feed import RssFeed, RssItem, RssPrompt, RssBriefing
 from app.models.weather import WeatherSource, WeatherSnapshot
 from app.models.llm import LlmProviderConfig, LlmTask, LlmPromptVersion
 from app.models.assistant import AssistantConversation, AssistantMessage
@@ -24,7 +24,7 @@ __all__ = [
     "ClassificationRule", "MailClassification",
     "ForwardingPolicy", "ForwardingWhitelist", "ForwardingLog",
     "DigestPolicy", "DigestRun", "DigestSection",
-    "RssFeed", "RssItem",
+    "RssFeed", "RssItem", "RssPrompt", "RssBriefing",
     "WeatherSource", "WeatherSnapshot",
     "LlmProviderConfig", "LlmTask", "LlmPromptVersion",
     "AssistantConversation", "AssistantMessage",

@@ -18,6 +18,7 @@ scheduler = AsyncIOScheduler(
 async def start_scheduler():
     from app.worker.tasks.mail_fetch import mail_fetch_job
     from app.worker.tasks.feed_fetch import feed_fetch_job
+    from app.worker.tasks.rss_summary import rss_summary_job
     from app.worker.tasks.weather_fetch import weather_fetch_job
     from app.worker.tasks.garmin_fetch import garmin_fetch_job
     from app.worker.tasks.podcast_fetch import podcast_fetch_job
@@ -29,6 +30,7 @@ async def start_scheduler():
 
     scheduler.add_job(mail_fetch_job, "interval", minutes=5, id="mail_fetch", replace_existing=True)
     scheduler.add_job(feed_fetch_job, "interval", minutes=30, id="feed_fetch", replace_existing=True)
+    scheduler.add_job(rss_summary_job, "interval", minutes=5, id="rss_summary", replace_existing=True)
     scheduler.add_job(weather_fetch_job, "interval", minutes=60, id="weather_fetch", replace_existing=True)
     scheduler.add_job(garmin_fetch_job, "interval", minutes=60, id="garmin_fetch", replace_existing=True)
     scheduler.add_job(depot_refresh_job, "interval", minutes=60, id="depot_refresh", replace_existing=True)

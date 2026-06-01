@@ -13,6 +13,7 @@ const LogsPage = lazy(() => import('./pages/LogsPage'))
 const AssistantPage = lazy(() => import('./pages/AssistantPage'))
 const HealthPage = lazy(() => import('./pages/HealthPage'))
 const PodcastsPage = lazy(() => import('./pages/PodcastsPage'))
+const RssPage = lazy(() => import('./pages/RssPage'))
 const DepotPage = lazy(() => import('./pages/DepotPage'))
 
 function App() {
@@ -24,6 +25,7 @@ function App() {
           <Route path="/assistant" element={<Suspense fallback={<PageSpinner />}><AssistantPage /></Suspense>} />
           <Route path="/health" element={<Suspense fallback={<PageSpinner />}><HealthPage /></Suspense>} />
           <Route path="/podcasts" element={<Suspense fallback={<PageSpinner />}><PodcastsPage /></Suspense>} />
+          <Route path="/rss" element={<Suspense fallback={<PageSpinner />}><RssPage /></Suspense>} />
           <Route path="/depot" element={<Suspense fallback={<PageSpinner />}><DepotPage /></Suspense>} />
           <Route path="/digests" element={<Suspense fallback={<PageSpinner />}><DigestsPage /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<PageSpinner />}><SettingsPage /></Suspense>} />

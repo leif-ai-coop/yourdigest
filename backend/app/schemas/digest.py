@@ -12,6 +12,9 @@ class DigestPolicyCreate(BaseModel):
     max_items: int = 9999
     include_weather: bool = True
     include_feeds: bool = True
+    feed_ai_briefing: bool = False
+    feed_briefing_prompt: str | None = Field(None, max_length=10000)
+    feed_ids: list[str] | None = None
     enabled: bool = True
     template: str = "default"
     digest_prompt: str | None = Field(None, max_length=10000)
@@ -41,6 +44,9 @@ class DigestPolicyUpdate(BaseModel):
     max_items: int | None = None
     include_weather: bool | None = None
     include_feeds: bool | None = None
+    feed_ai_briefing: bool | None = None
+    feed_briefing_prompt: str | None = Field(None, max_length=10000)
+    feed_ids: list[str] | None = None
     enabled: bool | None = None
     template: str | None = None
     digest_prompt: str | None = Field(None, max_length=10000)
@@ -71,6 +77,9 @@ class DigestPolicyResponse(BaseModel):
     max_items: int
     include_weather: bool
     include_feeds: bool
+    feed_ai_briefing: bool
+    feed_briefing_prompt: str | None
+    feed_ids: list[str] | None
     enabled: bool
     template: str
     digest_prompt: str | None

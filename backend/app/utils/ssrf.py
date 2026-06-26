@@ -67,9 +67,15 @@ async def _avalidate(url: str) -> None:
 
 
 async def safe_get(
-    client: httpx.AsyncClient, url: str, *, max_redirects: int = 5, **kwargs
+    client: httpx.AsyncClient, url: str, *, max_redirects: int = 20, **kwargs
 ) -> httpx.Response:
-    """GET that validates the target and every redirect hop is a public host."""
+    """GET that validates the target and every redirect hop is a public host.
+
+    max_redirects defaults to 20 (httpx's own default): podcast audio URLs chain
+    through several tracking prefixes (Podtrac, Chartable, Megaphone, Podder, ...)
+    and legitimately need 6+ hops — a lower cap breaks those downloads. The SSRF
+    guarantee is per-hop validation, not the count, so a generous cap is safe.
+    """
     current = url
     for _ in range(max_redirects + 1):
         await _avalidate(current)
@@ -86,7 +92,7 @@ async def safe_get(
 
 @asynccontextmanager
 async def safe_stream(
-    client: httpx.AsyncClient, method: str, url: str, *, max_redirects: int = 5, **kwargs
+    client: httpx.AsyncClient, method: str, url: str, *, max_redirects: int = 20, **kwargs
 ):
     """Streaming request that re-validates the target across redirects.
 

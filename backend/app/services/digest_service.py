@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -184,11 +184,15 @@ def _normalize_feed_ids(feed_ids) -> list | None:
 async def collect_feed_items(db: AsyncSession, since: datetime, limit: int = 50, feed_ids=None) -> list[dict]:
     """Collect recent RSS feed items. Optionally restricted to feed_ids."""
     from app.models.feed import RssFeed
+    # "New since the last digest" = published in the window OR first seen (created)
+    # in the window. Some feeds backdate entries (e.g. G-BA Beschluesse carry the
+    # decision date, often weeks old) or omit a parseable date entirely; filtering
+    # on published_at alone silently drops those even though we just fetched them.
     query = (
         select(RssItem, RssFeed.title.label("feed_title"))
         .join(RssFeed, RssItem.feed_id == RssFeed.id)
-        .where(RssItem.published_at >= since)
-        .order_by(desc(RssItem.published_at))
+        .where(or_(RssItem.published_at >= since, RssItem.created_at >= since))
+        .order_by(desc(func.coalesce(RssItem.published_at, RssItem.created_at)))
         .limit(limit)
     )
     fids = _normalize_feed_ids(feed_ids)
@@ -223,11 +227,14 @@ async def collect_feed_briefings(
     from app.models.feed import RssFeed, RssPrompt
     from app.services.rss_summary_service import DEFAULT_BRIEFING_PROMPT, _resolve_model
 
+    # Same "new since last digest" window as collect_feed_items: include items
+    # published OR first seen in the window, so backdated/dateless feeds still
+    # get a briefing instead of being silently skipped.
     query = (
         select(RssItem, RssFeed)
         .join(RssFeed, RssItem.feed_id == RssFeed.id)
-        .where(RssItem.published_at >= since)
-        .order_by(RssItem.feed_id, desc(RssItem.published_at))
+        .where(or_(RssItem.published_at >= since, RssItem.created_at >= since))
+        .order_by(RssItem.feed_id, desc(func.coalesce(RssItem.published_at, RssItem.created_at)))
     )
     fids = _normalize_feed_ids(feed_ids)
     if fids:

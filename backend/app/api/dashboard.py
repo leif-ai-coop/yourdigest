@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, or_
 
 from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -140,10 +140,19 @@ async def _podcasts(db: AsyncSession) -> dict:
 async def _rss(db: AsyncSession) -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     feeds = await db.scalar(select(func.count(RssFeed.id)).where(RssFeed.enabled == True))  # noqa: E712
-    new_24h = await db.scalar(select(func.count(RssItem.id)).where(RssItem.published_at >= since))
+    # "Neu in 24h" = published OR first seen in the window. Some feeds backdate
+    # entries (e.g. G-BA Beschluesse) or omit a parseable date; counting only
+    # published_at silently undercounts on the days those feeds deliver. Mirrors
+    # the digest window logic in digest_service.collect_feed_items.
+    new_24h = await db.scalar(select(func.count(RssItem.id)).where(
+        or_(RssItem.published_at >= since, RssItem.created_at >= since)
+    ))
+    # Order by the more recent of publish/fetch time (GREATEST ignores NULLs) so a
+    # freshly-fetched but backdated item surfaces by when we saw it, instead of
+    # ranking low on its old publish date and never showing in the "newest 8".
     rows = (await db.execute(
         select(RssItem, RssFeed.title).join(RssFeed, RssFeed.id == RssItem.feed_id)
-        .order_by(desc(RssItem.published_at)).limit(8)
+        .order_by(desc(func.greatest(RssItem.published_at, RssItem.created_at))).limit(8)
     )).all()
     latest = [{
         "id": str(it.id), "title": it.title, "feed": feed_title,

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feed import RssFeed, RssItem
+from app.utils.ssrf import safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ async def fetch_feed(db: AsyncSession, feed: RssFeed) -> int:
     """Fetch new items from an RSS feed. Returns count of new items."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(feed.url, follow_redirects=True)
+            resp = await safe_get(client, feed.url)
             resp.raise_for_status()
 
         parsed = feedparser.parse(resp.text)

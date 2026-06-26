@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     worker_enabled: bool = False
     log_level: str = "info"
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = ["https://assistant.curaos.de"]
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

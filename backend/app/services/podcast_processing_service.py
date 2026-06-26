@@ -22,6 +22,8 @@ import httpx
 from sqlalchemy import select, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.utils.ssrf import safe_stream
+
 from app.models.podcast import (
     PodcastEpisode, PodcastEpisodeChunk, PodcastArtifact,
     PodcastProcessingRun, PodcastFeed, PodcastPrompt,
@@ -133,8 +135,8 @@ async def download_episode_audio(db: AsyncSession, episode: PodcastEpisode) -> b
 
         audio_path = ep_dir / "original"
         async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
-            async with client.stream("GET", episode.audio_url, follow_redirects=True,
-                                     headers={"User-Agent": "YouDigest/1.0 (Podcast RSS Reader)"}) as resp:
+            async with safe_stream(client, "GET", episode.audio_url,
+                                   headers={"User-Agent": "YouDigest/1.0 (Podcast RSS Reader)"}) as resp:
                 resp.raise_for_status()
 
                 ct = resp.headers.get("content-type", "")

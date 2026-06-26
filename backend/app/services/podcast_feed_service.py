@@ -13,6 +13,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.podcast import PodcastFeed, PodcastEpisode
+from app.utils.ssrf import safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ async def fetch_podcast_feed(db: AsyncSession, feed: PodcastFeed) -> int:
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(feed.url, headers=headers, follow_redirects=True)
+            resp = await safe_get(client, feed.url, headers=headers)
 
             # 304 Not Modified
             if resp.status_code == 304:

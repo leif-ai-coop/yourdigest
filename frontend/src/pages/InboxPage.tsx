@@ -9,7 +9,7 @@ import {
   Inbox, Star, Archive, Eye, EyeOff, ChevronLeft,
   RefreshCw, Sparkles, Paperclip, Link2, AlertCircle,
   PenLine, Copy, Check, X, Send, Trash2, MailX,
-  FolderOpen, Package
+  FolderOpen, Package, Search
 } from 'lucide-react'
 
 interface MailMessage {
@@ -124,6 +124,9 @@ export default function InboxPage() {
   const [replyTo, setReplyTo] = useState('')
   const [replySubject, setReplySubject] = useState('')
   const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [searchMonths, setSearchMonths] = useState(4)  // 0 = Alle
   const PAGE_SIZE = 50
 
   const loadMessages = useCallback(async () => {
@@ -133,6 +136,14 @@ export default function InboxPage() {
       if (filter === 'unread') url += '&is_read=false'
       if (filter === 'flagged') url += '&is_flagged=true'
       if (category) url += `&category=${encodeURIComponent(category)}`
+      if (debouncedSearch.trim()) {
+        url += `&q=${encodeURIComponent(debouncedSearch.trim())}`
+        if (searchMonths > 0) {
+          const since = new Date()
+          since.setMonth(since.getMonth() - searchMonths)
+          url += `&since=${since.toISOString()}`
+        }
+      }
       const data = await api.get<MailMessage[]>(url)
       setMessages(data)
     } catch (e) {
@@ -140,9 +151,15 @@ export default function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, category, showArchived, activeFolder, page])
+  }, [filter, category, showArchived, activeFolder, page, debouncedSearch, searchMonths])
 
   useEffect(() => { loadMessages() }, [loadMessages])
+
+  // Debounce the search box (matches RssPage/PodcastsPage 400ms)
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search); setPage(1) }, 400)
+    return () => clearTimeout(t)
+  }, [search])
 
   useEffect(() => {
     api.get<{ folder: string; count: number }[]>('/mail/folders').then(setFolders).catch(() => {})
@@ -318,6 +335,43 @@ export default function InboxPage() {
             ))}
           </div>
         )}
+
+        {/* Search */}
+        <div className="flex items-center gap-2 px-4 pt-3">
+          <div className="relative flex-1 min-w-0">
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Mails durchsuchen (Betreff, Absender, Inhalt)…"
+              className="w-full pl-7 pr-7 py-1.5 text-xs bg-secondary rounded border border-border"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                title="Suche zurücksetzen"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {search && (
+            <select
+              value={searchMonths}
+              onChange={e => { setSearchMonths(Number(e.target.value)); setPage(1) }}
+              className="px-2 py-1.5 text-xs rounded bg-secondary border border-border text-muted-foreground"
+              title="Zeitfenster der Suche"
+            >
+              <option value={1}>1 Monat</option>
+              <option value={3}>3 Monate</option>
+              <option value={4}>4 Monate</option>
+              <option value={6}>6 Monate</option>
+              <option value={12}>1 Jahr</option>
+              <option value={0}>Alle</option>
+            </select>
+          )}
+        </div>
 
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">

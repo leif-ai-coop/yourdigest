@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc, func, distinct
+from sqlalchemy import select, desc, func, distinct, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, defer
 
@@ -207,6 +208,8 @@ async def list_messages(
     is_archived: bool | None = None,
     is_flagged: bool | None = None,
     category: str | None = None,
+    q: str | None = None,
+    since: datetime | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -238,6 +241,26 @@ async def list_messages(
         query = query.where(MailMessage.id.in_(
             select(MailClassification.message_id).where(MailClassification.category == category)
         ))
+    if q and q.strip():
+        # Multi-word: each word must appear in at least one searched field
+        # (AND over words, OR over fields) — same shape as the podcast search.
+        # body_text stays deferred in the SELECT; referencing it in WHERE does
+        # not load the blob into RAM. ILIKE '%term%' is accelerated by the
+        # pg_trgm GIN indexes on these columns (>= 3-char terms).
+        for word in q.split():
+            like = f"%{word}%"
+            query = query.where(or_(
+                MailMessage.subject.ilike(like),
+                MailMessage.from_address.ilike(like),
+                MailMessage.to_addresses.ilike(like),
+                MailMessage.body_text.ilike(like),
+            ))
+    if since is not None:
+        # coalesce so mails without a parsed Date header (date NULL) aren't
+        # silently dropped from the search window.
+        query = query.where(
+            func.coalesce(MailMessage.date, MailMessage.created_at) >= since
+        )
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     return [_add_unsubscribe(msg) for msg in result.scalars().all()]

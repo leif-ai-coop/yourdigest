@@ -12,6 +12,14 @@ import {
   FolderOpen, Package, Search
 } from 'lucide-react'
 
+interface UnsubEntry {
+  from_address: string
+  sender: string
+  count: number
+  unsubscribe_url: string
+  last_seen: string | null
+}
+
 interface MailMessage {
   id: string
   account_id: string
@@ -127,7 +135,23 @@ export default function InboxPage() {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [searchMonths, setSearchMonths] = useState(4)  // 0 = Alle
+  const [showUnsub, setShowUnsub] = useState(false)
+  const [unsubList, setUnsubList] = useState<UnsubEntry[]>([])
+  const [unsubLoading, setUnsubLoading] = useState(false)
   const PAGE_SIZE = 50
+
+  const openUnsub = useCallback(async () => {
+    setShowUnsub(true)
+    setUnsubLoading(true)
+    try {
+      const data = await api.get<UnsubEntry[]>('/mail/unsubscribes?days=30')
+      setUnsubList(data)
+    } catch {
+      setUnsubList([])
+    } finally {
+      setUnsubLoading(false)
+    }
+  }, [])
 
   const loadMessages = useCallback(async () => {
     try {
@@ -307,6 +331,62 @@ export default function InboxPage() {
 
   return (
     <div className="flex h-[calc(100dvh-3rem)] md:h-screen min-w-0 w-full">
+      {/* Unsubscribe overlay */}
+      {showUnsub && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-16"
+          onClick={() => setShowUnsub(false)}
+        >
+          <div
+            className="w-full max-w-lg max-h-[80vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <div className="flex items-center gap-2 min-w-0">
+                <MailX className="w-4 h-4 text-primary flex-shrink-0" />
+                <h2 className="text-sm font-semibold truncate">Abmeldelinks · letzte 30 Tage</h2>
+              </div>
+              <button
+                onClick={() => setShowUnsub(false)}
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground"
+                title="Schließen"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {unsubLoading ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">Lädt…</div>
+              ) : unsubList.length === 0 ? (
+                <EmptyState icon={MailX} title="Keine Abmeldelinks" description="In den letzten 30 Tagen wurden keine Newsletter mit Abmeldelink gefunden." />
+              ) : (
+                <ul className="divide-y divide-border/50">
+                  {unsubList.map(u => (
+                    <li key={u.from_address} className="flex items-center gap-3 px-4 py-2.5">
+                      <span className="flex-shrink-0 w-8 h-6 rounded bg-secondary text-xs font-medium text-muted-foreground flex items-center justify-center" title={`${u.count} Mails in 30 Tagen`}>
+                        {u.count}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate text-foreground">{u.sender}</div>
+                        <div className="text-xs truncate text-muted-foreground">{u.from_address}</div>
+                      </div>
+                      <a
+                        href={u.unsubscribe_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-shrink-0 px-2.5 py-1 text-xs rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                      >
+                        Abmelden
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mail List */}
       <div className={`${deepLinked && selected ? 'hidden' : selected ? 'hidden md:flex md:w-96' : 'flex-1'} border-r border-border flex flex-col bg-background min-w-0`}>
         {/* Folder Tabs */}
@@ -404,6 +484,13 @@ export default function InboxPage() {
             </select>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              onClick={openUnsub}
+              className="p-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground transition-colors"
+              title="Abmeldelinks (letzte 30 Tage)"
+            >
+              <MailX className="w-3.5 h-3.5" />
+            </button>
             <button
               onClick={() => setShowArchived(!showArchived)}
               className={`p-1.5 rounded-md text-xs transition-colors ${showArchived ? 'text-primary bg-primary/15' : 'text-muted-foreground hover:text-foreground'}`}

@@ -352,9 +352,14 @@ def _inbox_link(item: dict) -> str:
 
 
 def _unsub_link_html(item: dict) -> str:
-    """Render a small unsubscribe link if available."""
-    if item.get("unsubscribe_link"):
-        return f' <a href="{item["unsubscribe_link"]}" style="font-size:10px;color:#7a8ba8;text-decoration:none;margin-left:6px">abmelden</a>'
+    """Unsubscribe links are no longer embedded in the digest.
+
+    Raw newsletter/tracking unsubscribe URLs (list-manage.com, sendibm1.com,
+    kit-mail3.com, ...) sit on URI blacklists (SURBL/URIBL). Strato's outbound
+    spam filter refused the whole digest (550 ... B-URL) once enough of them
+    accumulated. The unsubscribe links now live in the Inbox ("Abmeldelinks",
+    GET /api/mail/unsubscribes) instead of the outgoing mail body.
+    """
     return ""
 
 
@@ -1798,7 +1803,11 @@ async def compose_digest(
             "health": render_health_section(health_data, policy.health_charts or [], health_ai_summary) if health_data and policy.health_charts else "",
             "mail": render_mail_section(mail_items, detail_threshold, compact_threshold),
             "feeds": feeds_html,
-            "unsubscribe": render_unsubscribe_section(mail_items),
+            # Unsubscribe section removed from the digest: the raw newsletter
+            # unsubscribe URLs it dumped are blacklisted (SURBL/URIBL) and made
+            # Strato refuse the whole mail (550 B-URL). Moved to the Inbox
+            # ("Abmeldelinks", GET /api/mail/unsubscribes).
+            "unsubscribe": "",
             "podcasts": render_podcast_digest_section(podcast_episodes, podcast_max) if podcast_episodes else "",
             "depot": render_depot_section(depot_data, depot_ai_summary, policy.depot_top_n or 10) if depot_data else "",
         }

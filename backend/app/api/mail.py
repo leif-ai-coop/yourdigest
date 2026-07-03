@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, func, distinct, or_
@@ -63,6 +64,23 @@ def _extract_unsubscribe_url(raw_headers: str | None) -> str | None:
             urls = re.findall(r'(https?://\S+)', line)
             if urls:
                 return urls[0]
+    return None
+
+
+_UNSUB_KEYWORDS = ("unsubscribe", "abmelden", "abbestellen", "opt-out", "optout", "newsletter")
+
+
+def _unsubscribe_from_links(links) -> str | None:
+    """Fallback: derive an unsubscribe URL from the mail's body links.
+
+    Some senders only provide an in-body unsubscribe link (no List-Unsubscribe
+    header). Mirrors the keyword match the digest used to do.
+    """
+    for link in links or []:
+        text = (link.text or "").lower()
+        url = (link.url or "").lower()
+        if any(kw in text or kw in url for kw in _UNSUB_KEYWORDS):
+            return link.url
     return None
 
 
@@ -198,6 +216,79 @@ async def get_synced_folders(db: AsyncSession = Depends(get_db)):
         .order_by(MailMessage.folder)
     )
     return [{"folder": row.folder, "count": row.count} for row in result.all()]
+
+
+@router.get("/unsubscribes")
+async def list_unsubscribes(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """Aggregated unsubscribe links from the last `days` of mail.
+
+    One row per sender (grouped by email address), sorted by how many mails
+    that sender sent in the window (descending). Only senders that actually
+    expose an unsubscribe link (List-Unsubscribe header, or an in-body
+    unsubscribe link as fallback) are returned. This replaces the raw
+    unsubscribe URL dump that used to sit in the digest mail body — those
+    blacklisted URLs made Strato refuse the whole digest (550 B-URL).
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    # Defer the big body blobs; we only need headers (for List-Unsubscribe)
+    # and the body links (fallback). raw_headers stays loaded.
+    result = await db.execute(
+        select(MailMessage)
+        .options(
+            defer(MailMessage.body_text),
+            defer(MailMessage.body_html),
+            selectinload(MailMessage.links),
+        )
+        .where(func.coalesce(MailMessage.date, MailMessage.created_at) >= since)
+    )
+    messages = result.scalars().all()
+
+    agg: dict[str, dict] = {}
+    for msg in messages:
+        name, addr = parseaddr(msg.from_address or "")
+        key = (addr or msg.from_address or "").lower()
+        if not key:
+            continue
+        entry = agg.get(key)
+        if entry is None:
+            entry = {
+                "from_address": addr or msg.from_address,
+                "sender": name or addr or msg.from_address,
+                "count": 0,
+                "unsubscribe_url": None,
+                "last_seen": None,
+                "_url_dt": None,
+            }
+            agg[key] = entry
+        entry["count"] += 1
+        # Track the display name/date from the most recent mail.
+        msg_dt = msg.date or msg.created_at
+        if msg_dt is not None and (entry["last_seen"] is None or msg_dt > entry["last_seen"]):
+            entry["last_seen"] = msg_dt
+            if name:
+                entry["sender"] = name
+        # Prefer the unsubscribe URL from the most recent mail that has one.
+        url = _extract_unsubscribe_url(msg.raw_headers) or _unsubscribe_from_links(msg.links)
+        if url and (entry["_url_dt"] is None or (msg_dt is not None and msg_dt >= entry["_url_dt"])):
+            entry["unsubscribe_url"] = url
+            entry["_url_dt"] = msg_dt
+
+    rows = [
+        {
+            "from_address": e["from_address"],
+            "sender": e["sender"],
+            "count": e["count"],
+            "unsubscribe_url": e["unsubscribe_url"],
+            "last_seen": e["last_seen"].isoformat() if e["last_seen"] else None,
+        }
+        for e in agg.values()
+        if e["unsubscribe_url"]
+    ]
+    rows.sort(key=lambda r: (r["count"], r["last_seen"] or ""), reverse=True)
+    return rows
 
 
 @router.get("/messages")

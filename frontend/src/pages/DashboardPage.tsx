@@ -11,6 +11,7 @@ import {
   Inbox, Wallet, Headphones, Rss, FileText, CloudSun, ScrollText, Heart,
   RefreshCw, Settings2, TrendingUp, TrendingDown, Mail, AlertTriangle,
   Sun, Cloud, CloudRain, CloudSnow, CloudFog, CloudLightning, CloudDrizzle, Droplets, Wind,
+  ChevronDown, ChevronRight, ChevronLeft, Sparkles,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -182,6 +183,8 @@ export default function DashboardPage() {
         </div>
       )}
 
+      <LatestDigestPanel />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {visible.map((id, idx) => {
           const meta = metaFor(id)!
@@ -201,6 +204,95 @@ export default function DashboardPage() {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+interface DigestRunLite { id: string; status: string; item_count: number; created_at: string }
+
+// Section types already covered by their own dashboard widget -> hidden in the
+// panel (backend rebuilds the HTML from the remaining sections). Kept: ai_summary, mail.
+const DIGEST_EXCLUDE = 'weather,health,depot,podcast,feed'
+
+function LatestDigestPanel() {
+  const [open, setOpen] = useState(() => localStorage.getItem('dashboardDigestOpen') !== '0')
+  const [runs, setRuns] = useState<DigestRunLite[] | null>(null)
+  const [idx, setIdx] = useState(0)
+  const [html, setHtml] = useState<string | null>(null)
+  const [loadingHtml, setLoadingHtml] = useState(false)
+  const [frameH, setFrameH] = useState(320)
+
+  useEffect(() => {
+    api.get<DigestRunLite[]>('/digest/runs')
+      .then(rs => setRuns(rs.filter(r => r.status === 'completed')))
+      .catch(() => setRuns([]))
+  }, [])
+
+  const current = runs && runs.length > 0 ? runs[Math.min(idx, runs.length - 1)] : null
+
+  useEffect(() => {
+    if (!open || !current) return
+    let cancelled = false
+    setLoadingHtml(true); setHtml(null)
+    fetch(`/api/digest/runs/${current.id}/html?exclude=${DIGEST_EXCLUDE}`)
+      .then(r => (r.ok ? r.text() : Promise.reject(new Error('no preview'))))
+      .then(t => { if (!cancelled) setHtml(t) })
+      .catch(() => { if (!cancelled) setHtml(null) })
+      .finally(() => { if (!cancelled) setLoadingHtml(false) })
+    return () => { cancelled = true }
+  }, [open, current])
+
+  const toggle = () => setOpen(v => { const nv = !v; localStorage.setItem('dashboardDigestOpen', nv ? '1' : '0'); return nv })
+
+  if (runs && runs.length === 0) return null
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button onClick={toggle} className="flex items-center gap-2 min-w-0 flex-1 text-left">
+          {open ? <ChevronDown className="w-4 h-4 flex-shrink-0 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 flex-shrink-0 text-muted-foreground" />}
+          <Sparkles className="w-4 h-4 flex-shrink-0 text-primary" />
+          <span className="text-sm font-medium truncate">Letzter Digest</span>
+          {current && <span className="text-xs text-muted-foreground truncate">· {formatDate(current.created_at)}</span>}
+        </button>
+        {open && runs && runs.length > 1 && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button onClick={() => setIdx(i => Math.min(i + 1, runs.length - 1))} disabled={idx >= runs.length - 1}
+              className="p-1 rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground" title="Älterer Digest">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-[11px] text-muted-foreground tabular-nums w-10 text-center">{idx + 1}/{runs.length}</span>
+            <button onClick={() => setIdx(i => Math.max(i - 1, 0))} disabled={idx <= 0}
+              className="p-1 rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground" title="Neuerer Digest">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </div>
+      {open && (
+        <div className="border-t border-border">
+          {loadingHtml ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">Lade Digest…</div>
+          ) : html ? (
+            <iframe
+              srcDoc={html}
+              title="Letzter Digest"
+              className="w-full block"
+              style={{ height: frameH, border: 'none' }}
+              onLoad={e => {
+                try {
+                  const b = e.currentTarget.contentDocument?.body
+                  if (b) setFrameH(Math.min(b.scrollHeight + 8, 1600))
+                } catch { /* ignore */ }
+              }}
+            />
+          ) : (
+            <div className="p-6 text-center text-xs text-muted-foreground">Keine Vorschau verfügbar</div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

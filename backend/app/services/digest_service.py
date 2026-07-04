@@ -87,6 +87,42 @@ DIGEST_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
+def build_partial_digest_html(run, exclude: set[str] | None = None) -> str:
+    """Rebuild a run's HTML from its stored sections, omitting excluded types.
+
+    Used by the dashboard "latest digest" panel to hide sections that are
+    already shown as their own dashboard widget (weather/health/depot/...).
+    Sections keep their stored order. The ai_summary section stores the raw
+    LLM text (not the styled card), so it gets wrapped here to match the mail
+    the same way compose_digest does.
+    """
+    exclude = exclude or set()
+    secs = sorted(run.sections, key=lambda s: s.order)
+    parts: list[str] = []
+    for s in secs:
+        if s.section_type in exclude or not s.content:
+            continue
+        if s.section_type == "ai_summary":
+            parts.append(
+                '<div style="background:#151d30;border:1px solid #1e2d4a;border-radius:10px;'
+                'margin-bottom:16px;overflow:hidden">'
+                '<div style="padding:14px 18px;border-bottom:1px solid #1e2d4a"><h2>✨ AI Overview</h2></div>'
+                '<div style="padding:14px 18px">'
+                '<div style="background:#1a2540;border-left:3px solid #5b9cf6;padding:12px 16px;margin:12px 0;'
+                'border-radius:0 8px 8px 0;font-size:13px;line-height:1.6;color:#a0aec0">'
+                f'{_safe_llm_html(s.content)}</div></div></div>'
+            )
+        else:
+            parts.append(s.content)
+    return DIGEST_HTML_TEMPLATE.format(
+        date=run.created_at.strftime("%A, %B %d, %Y"),
+        item_count=run.item_count,
+        weather_section="",
+        ai_summary_section="",
+        sections="".join(parts),
+    )
+
+
 async def collect_mail_items(
     db: AsyncSession, policy: DigestPolicy, since: datetime
 ) -> list[dict]:
@@ -205,7 +241,8 @@ async def collect_feed_items(db: AsyncSession, since: datetime, limit: int = 50,
             "title": item.title,
             "link": item.link,
             # Prefer the AI summary when available, else the raw feed snippet.
-            "summary": (item.ai_summary[:400] if item.ai_summary else (item.summary[:200] if item.summary else None)),
+            # Full text (no truncation) — the digest renderer sanitizes it.
+            "summary": (item.ai_summary if item.ai_summary else (item.summary if item.summary else None)),
             "published": str(item.published_at),
             "source": feed_title or "RSS",
         }
@@ -772,6 +809,19 @@ def render_weather_section(weather: dict | None, ai_summary: str | None = None) 
   </div>"""
 
 
+# Safe tag subset for raw feed-item summaries. Links/images are stripped to
+# text: feed summaries carry arbitrary external URLs, and raw foreign URLs in an
+# outgoing digest body trip Strato's URI blacklist filter (550 ... B-URL) and get
+# the WHOLE mail rejected. The item title stays a link to the article (line above).
+_FEED_SUMMARY_TAGS = ["p", "br", "strong", "b", "em", "i", "ul", "ol", "li", "h3", "h4", "blockquote"]
+
+
+def _safe_feed_summary(text: str) -> str:
+    """Sanitize a raw feed summary to a safe HTML subset (also closes any tags
+    left open by upstream slicing, and strips links/images to plain text)."""
+    return bleach.clean(text, tags=_FEED_SUMMARY_TAGS, attributes={}, strip=True)
+
+
 def render_feed_section(feed_items: list[dict]) -> str:
     """Render RSS feed items as HTML, grouped by source feed."""
     if not feed_items:
@@ -790,7 +840,7 @@ def render_feed_section(feed_items: list[dict]) -> str:
             rows += f"""
       <div style="padding:8px 0;border-bottom:1px solid #1a2540">
         <a href="{item['link']}" style="font-size:13px;color:#5b9cf6;text-decoration:none">{item['title']}</a>
-        {f'<div style="font-size:11px;color:#5a6a85">{item["summary"]}</div>' if item.get("summary") else ""}
+        {f'<div style="font-size:12px;color:#8896ab;line-height:1.5;margin-top:4px">{_safe_feed_summary(item["summary"])}</div>' if item.get("summary") else ""}
       </div>"""
 
         sections += f"""

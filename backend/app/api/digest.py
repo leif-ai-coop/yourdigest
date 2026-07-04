@@ -160,13 +160,38 @@ async def trigger_run(
 # --- Preview ---
 
 @router.get("/runs/{run_id}/html")
-async def get_run_html(run_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Get the HTML content of a digest run for preview."""
-    run = await db.get(DigestRun, run_id)
+async def get_run_html(
+    run_id: uuid.UUID,
+    exclude: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the HTML content of a digest run for preview.
+
+    Without `exclude`: returns the stored full HTML (unchanged behavior).
+    With `exclude` (comma-separated section_types, e.g. "weather,depot"):
+    rebuilds the HTML from the run's stored sections, omitting those types.
+    Used by the dashboard "latest digest" panel to skip sections already
+    shown as their own widget.
+    """
+    from fastapi.responses import HTMLResponse
+
+    if exclude is None:
+        run = await db.get(DigestRun, run_id)
+        if not run:
+            raise NotFoundError("Digest run not found")
+        if not run.html_content:
+            raise NotFoundError("No HTML content available for this run")
+        return HTMLResponse(content=run.html_content)
+
+    result = await db.execute(
+        select(DigestRun)
+        .options(selectinload(DigestRun.sections))
+        .where(DigestRun.id == run_id)
+    )
+    run = result.scalars().first()
     if not run:
         raise NotFoundError("Digest run not found")
-    if not run.html_content:
-        raise NotFoundError("No HTML content available for this run")
 
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse(content=run.html_content)
+    from app.services.digest_service import build_partial_digest_html
+    excluded = {p.strip() for p in exclude.split(",") if p.strip()}
+    return HTMLResponse(content=build_partial_digest_html(run, excluded))
